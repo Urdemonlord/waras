@@ -157,8 +157,11 @@ impl Db {
     }
 
     /// Hitung jumlah tablet dari dosis + durasi, aturan KONTRAK §3:
-    /// angka hari x frekuensi per hari. Mis. dosage `500 mg 1x1` +
-    /// duration `3 hari` = 3 tablet; `500 mg 3x1, 30 hari` = 90.
+    /// angka hari x frekuensi per hari. Mis. dosage `1x1` +
+    /// duration `3 hari` = 3 tablet; `3x1, 30 hari` = 90.
+    /// Format lama `500 mg 1x1` tetap diparse (kekuatan diabaikan),
+    /// karena `dosage` kanonik kini hanya frekuensi
+    /// (lihat `waras_core::dosage::normalize_dosage`).
     /// Bila tidak bisa diparse, kembalikan 1 (jangan gagalkan dispensing).
     pub fn dose_count(dosage: &str, duration: &str) -> i64 {
         let freq = dosage
@@ -268,9 +271,11 @@ mod tests {
 
     #[test]
     fn dose_count_parses_contract_example() {
+        assert_eq!(Db::dose_count("1x1", "3 hari"), 3);
+        assert_eq!(Db::dose_count("3x1", "30 hari"), 90);
+        assert_eq!(Db::dose_count("2x1", "5 hari"), 10);
+        // Format lama (kekuatan di dosage) tetap diparse.
         assert_eq!(Db::dose_count("500 mg 1x1", "3 hari"), 3);
-        assert_eq!(Db::dose_count("500 mg 3x1", "30 hari"), 90);
-        assert_eq!(Db::dose_count("200 mg 2x1", "5 hari"), 10);
         assert_eq!(Db::dose_count("tanpa pola", "7 hari"), 7);
     }
 
@@ -363,7 +368,7 @@ mod tests {
                     encounter_id: "ENC-2026-11-19-014".into(),
                     drug_name: "Amoxicillin 500 mg".into(),
                     drug_class: "penicillin".into(),
-                    dosage: "500 mg 1x1".into(),
+                    dosage: "1x1".into(),
                     duration: "3 hari".into(),
                 },
             )
@@ -387,7 +392,7 @@ mod tests {
                     encounter_id: "ENC-2026-11-19-014".into(),
                     drug_name: "Azithromycin 500 mg".into(),
                     drug_class: "macrolide".into(),
-                    dosage: "500 mg 1x1".into(),
+                    dosage: "1x1".into(),
                     duration: "3 hari".into(),
                 },
             )

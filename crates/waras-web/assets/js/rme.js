@@ -56,7 +56,7 @@
       (String(patient.gender).toLowerCase().indexOf('perempuan') >= 0 ? 'Perempuan' : 'Laki-laki');
     document.getElementById('banner-meta').textContent =
       'Encounter ' + enc.id + ' · ' + Waras.fmtDateId(enc.date) + ' ' + (enc.time || '') + ' · ' + enc.doctor_name;
-    document.getElementById('page-title').textContent = 'Patient Workspace / ' + patient.id;
+    document.getElementById('page-title').textContent = 'Clinical Workspace / ' + patient.id;
     document.getElementById('page-sub').textContent =
       'Clinical Workspace · Encounter ' + enc.id + ' · Rawat Jalan · ' + enc.doctor_name;
     document.getElementById('who-name').textContent =
@@ -86,9 +86,9 @@
       var replacement = blocked.replaced_by
         ? rxList.find(function (r) { return r.id === blocked.replaced_by; }) : null;
       document.getElementById('alert-text').textContent =
-        'Resep ' + blocked.drug_name + ' ' + blocked.dosage + ' DIBLOKIR otomatis' +
+        'Resep ' + Waras.drugDose(blocked.drug_name, blocked.dosage) + ' DIBLOKIR otomatis' +
         (blocked.blocked_reason ? ' (' + blocked.blocked_reason + ')' : '') +
-        (replacement ? '. Diganti ' + replacement.drug_name + ' ' + replacement.dosage +
+        (replacement ? '. Diganti ' + Waras.drugDose(replacement.drug_name, replacement.dosage) +
           ' — menunggu konfirmasi dokter.' : '.');
       alertEl.style.display = '';
     } else if (penAllergy) {

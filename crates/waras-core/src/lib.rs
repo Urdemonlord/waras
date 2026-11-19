@@ -5,6 +5,7 @@
 //! `waras-api` (HTTP handlers) and the `waras` binary. If a type changes,
 //! change it here first; the compiler will point at every place that drifts.
 
+pub mod dosage;
 pub mod error;
 pub mod fhir;
 pub mod ids;

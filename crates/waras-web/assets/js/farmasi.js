@@ -12,7 +12,7 @@
         var canDispense = String(r.status).toLowerCase() === 'aktif';
         return '<tr><td>' + Waras.esc(r.id) + '</td>' +
           '<td>' + Waras.esc(Waras.patientName(map, r.patient_id)) + '</td>' +
-          '<td>' + Waras.esc(r.drug_name) + ' ' + Waras.esc(r.dosage) + '</td>' +
+          '<td>' + Waras.esc(Waras.drugDose(r.drug_name, r.dosage)) + '</td>' +
           '<td>' + Waras.esc(r.doctor) + '</td>' +
           '<td>' + Waras.pillFor(r.status) + '</td>' +
           '<td>' + (canDispense

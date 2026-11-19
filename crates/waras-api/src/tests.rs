@@ -191,7 +191,7 @@ async fn kasir_cannot_prescribe() {
                 "encounter_id": ENC_SITI,
                 "drug_name": "Azithromycin 500 mg",
                 "drug_class": "macrolide",
-                "dosage": "500 mg 1x1",
+                "dosage": "1x1",
                 "duration": "3 hari",
             })),
         ),
@@ -215,7 +215,7 @@ async fn perawat_cannot_prescribe() {
                 "encounter_id": ENC_SITI,
                 "drug_name": "Azithromycin 500 mg",
                 "drug_class": "macrolide",
-                "dosage": "500 mg 1x1",
+                "dosage": "1x1",
                 "duration": "3 hari",
             })),
         ),
@@ -294,7 +294,7 @@ async fn prescribe_amoxicillin_for_siti_blocked_422_and_stored() {
                 "encounter_id": ENC_SITI,
                 "drug_name": "Amoxicillin 500 mg",
                 "drug_class": "penicillin",
-                "dosage": "500 mg 1x1",
+                "dosage": "1x1",
                 "duration": "3 hari",
             })),
         ),
@@ -350,6 +350,9 @@ async fn prescribe_azithromycin_for_siti_succeeds() {
                 "encounter_id": ENC_SITI,
                 "drug_name": "Azithromycin 500 mg",
                 "drug_class": "macrolide",
+                // Sengaja kirim format lama: server harus menormalisasi
+                // dosage jadi frekuensi saja ("1x1"), bukan menyimpan
+                // "500 mg 1x1" yang mengulang kekuatan dari drug_name.
                 "dosage": "500 mg 1x1",
                 "duration": "3 hari",
             })),
@@ -359,6 +362,7 @@ async fn prescribe_azithromycin_for_siti_succeeds() {
     assert_eq!(s, StatusCode::CREATED, "{v}");
     assert_eq!(v["status"], "aktif");
     assert_eq!(v["drug_name"], "Azithromycin 500 mg");
+    assert_eq!(v["dosage"], "1x1", "dosage ternormalisasi, tanpa kekuatan dobel: {v}");
 }
 
 #[tokio::test]

@@ -92,7 +92,7 @@ Auth: header `Authorization: Bearer <token>` kecuali `/api/health` dan
 | `GET /api/prescriptions?status=&patient_id=` | login | — | daftar resep. |
 | `POST /api/prescriptions` | Dokter/Admin | `NewPrescription` | **WAJIB lewati `safety::check_prescription` dulu**: bila diblokir -> 422 + simpan resep status Diblokir + `blocked_reason` + audit `prescription.blocked`. Bila lolos -> resep Aktif, id `RX-####` berikutnya. |
 | `POST /api/prescriptions/:id/confirm` | Dokter/Admin | — | MenungguKonfirmasi -> Aktif. |
-| `POST /api/prescriptions/:id/dispense` | Apoteker/Admin | — | Aktif -> Diberikan, stok obat berkurang sesuai dosis (jumlah tablet dari `dosage`, mis. `500 mg 1x1, 3 hari` = 3 tablet; hitung sederhana: angka hari x frekuensi per hari). |
+| `POST /api/prescriptions/:id/dispense` | Apoteker/Admin | — | Aktif -> Diberikan, stok obat berkurang sesuai dosis (jumlah tablet dari `dosage`, mis. `1x1, 3 hari` = 3 tablet; hitung sederhana: angka hari x frekuensi per hari). |
 | `GET /api/drugs` | login | — | daftar obat + `stock_status` dari `Drug::stock_status()`. |
 | `GET /api/dashboard` | login | — | `DashboardKpis` (lihat §4). |
 | `GET /api/invoices?status=` | login | — | daftar tagihan. |
@@ -207,12 +207,12 @@ Kondisi lain: Budi J06.9 ISPA atas; Ahmad Fauzi J06.9; Putri Ayu J06.9
 
 | ID | Pasien | Obat | Dosis | Dokter | Status |
 |---|---|---|---|---|---|
-| RX-1040 | Siti Rahmawati | Amoxicillin 500 mg | 500 mg 1x1, 3 hari | dr. Ahmad H. | Diblokir (alasan: alergi Penisilin; `replaced_by` RX-1041) |
-| RX-1041 | Siti Rahmawati | Azithromycin 500 mg | 500 mg 1x1, 3 hari | dr. Ahmad H. | MenungguKonfirmasi |
-| RX-1042 | Budi Santoso | Paracetamol 500 mg | 500 mg 3x1, 3 hari | dr. Sari Dewi | Aktif |
+| RX-1040 | Siti Rahmawati | Amoxicillin 500 mg | 1x1, 3 hari | dr. Ahmad H. | Diblokir (alasan: alergi Penisilin; `replaced_by` RX-1041) |
+| RX-1041 | Siti Rahmawati | Azithromycin 500 mg | 1x1, 3 hari | dr. Ahmad H. | MenungguKonfirmasi |
+| RX-1042 | Budi Santoso | Paracetamol 500 mg | 3x1, 3 hari | dr. Sari Dewi | Aktif |
 | RX-1043 | Dewi Lestari | Amlodipine 5 mg | 5 mg 1x1, 30 hari | dr. Rina | Aktif |
 | RX-1044 | Agus Prasetyo | Cefixime 200 mg | 200 mg 2x1, 5 hari | drg. Maya K. | Aktif |
-| RX-1045 | Rina Marlina | Metformin 500 mg | 500 mg 3x1, 30 hari | dr. Ahmad H. | Aktif |
+| RX-1045 | Rina Marlina | Metformin 500 mg | 3x1, 30 hari | dr. Ahmad H. | Aktif |
 | RX-1046 | Joko Susilo | Ibuprofen 400 mg | 400 mg 3x1, 3 hari | dr. Budi, Sp.B | Aktif |
 | RX-1047 | Sri Wahyuni | Omeprazole 20 mg | 20 mg 1x1, 14 hari | dr. Rina | Aktif |
 

@@ -80,11 +80,42 @@
     return Number(d[2]) + ' ' + bulan[Number(d[1]) - 1] + ' ' + d[0];
   }
   function initials(name) {
+    // Gelar dilewati: token berisi titik ("dr.", "Sp.PD", "S.Kep.") atau
+    // gelar telanjang ("dr", "Ns", "Apt", "drg", "Bdn"). Inisial dari kata
+    // nama pertama + terakhir: "dr. Ahmad Hidayat" -> "AH" (bukan "DA"),
+    // "Ns. Sari Wijaya" -> "SW".
+    var TITLES = { dr: 1, drg: 1, ns: 1, apt: 1, bdn: 1, prof: 1 };
     var parts = String(name || '?').trim().split(/\s+/);
-    var keep = parts.filter(function (w) { return w && w[0] !== '(' && /^[A-Za-z]/.test(w); });
+    var keep = parts.filter(function (w) {
+      if (!w || w[0] === '(') return false;
+      if (w.indexOf('.') !== -1) return false;
+      return !TITLES[w.replace(/,+$/, '').toLowerCase()];
+    });
     var a = keep[0] ? keep[0][0] : '?';
-    var b = keep[1] ? keep[1][0] : '';
+    var b = keep.length > 1 ? keep[keep.length - 1][0] : '';
     return (a + b).toUpperCase();
+  }
+
+  // Tampilan obat: "Amoxicillin 500 mg" + "1x1". Bila dosage masih membawa
+  // kekuatan ("500 mg 1x1", baris lama / ketikan bebas), kekuatan yang
+  // dobel dibuang supaya tidak tampil "500 mg 500 mg 1x1". Aturan yang
+  // sama dengan `waras_core::dosage::normalize_dosage` di server.
+  function drugDose(drug, dosage) {
+    var name = String(drug || '');
+    var d = String(dosage || '').trim();
+    var m = name.match(/(\d+(?:[.,]\d+)?\s*(?:mg|g|mcg|µg|IU|ml|%))\s*$/i);
+    if (m) {
+      var compact = function (s) { return s.replace(/\s+/g, '').toLowerCase(); };
+      if (compact(d).indexOf(compact(m[1])) === 0) {
+        var need = compact(m[1]).length, seen = 0, i = 0;
+        while (i < d.length && seen < need) {
+          if (/\s/.test(d[i])) { i++; continue; }
+          seen++; i++;
+        }
+        d = d.slice(i).trim();
+      }
+    }
+    return d ? name + ' ' + d : name;
   }
 
   // ---- Status pill (CONTRACT §6: teks berwarna + dot + latar pucat) ----
@@ -241,7 +272,7 @@
   window.Waras = {
     TODAY: TODAY, api: api, asList: asList, esc: esc,
     fmtRp: fmtRp, fmtJt: fmtJt, fmtNum: fmtNum, fmtDateId: fmtDateId,
-    initials: initials, statusPill: statusPill, pillFor: pillFor,
+    initials: initials, drugDose: drugDose, statusPill: statusPill, pillFor: pillFor,
     labelFor: labelFor, roleLabel: roleLabel, toast: toast,
     patientsMap: patientsMap, patientName: patientName,
     token: token, setToken: setToken, initShell: initShell

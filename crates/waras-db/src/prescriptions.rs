@@ -46,6 +46,11 @@ impl Db {
         let patient_id = encounter.patient_id.clone();
         let allergies = self.get_allergies(&patient_id).await?;
 
+        // Kanonik: dosage hanya frekuensi ("1x1"); kekuatan hidup di
+        // drug_name. Tanpa ini, tampilan mengulang kekuatan
+        // ("Amoxicillin 500 mg 500 mg 1x1").
+        let dosage = waras_core::dosage::normalize_dosage(&input.drug_name, &input.dosage);
+
         let ids_all: Vec<String> = sqlx::query_scalar("SELECT id FROM medication_requests")
             .fetch_all(&self.pool)
             .await
@@ -68,7 +73,7 @@ impl Db {
                 .bind(&patient_id)
                 .bind(&input.drug_name)
                 .bind(&input.drug_class)
-                .bind(&input.dosage)
+                .bind(&dosage)
                 .bind(&input.duration)
                 .bind(actor)
                 .bind(&reason)
@@ -102,7 +107,7 @@ impl Db {
                 .bind(&patient_id)
                 .bind(&input.drug_name)
                 .bind(&input.drug_class)
-                .bind(&input.dosage)
+                .bind(&dosage)
                 .bind(&input.duration)
                 .bind(prescription_status_to_str(status))
                 .bind(actor)

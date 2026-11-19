@@ -354,7 +354,9 @@ pub struct MedicationRequest {
     pub drug_name: String,
     /// Kelas obat, mis. `penicillin`, `macrolide`. Dipakai aturan keamanan.
     pub drug_class: String,
-    /// Dosis + frekuensi, mis. `500 mg 1x1`.
+    /// Frekuensi, mis. `1x1`. Kekuatan obat (mis. `500 mg`) ada di
+    /// `drug_name`; dosage TIDAK boleh mengulang kekuatan
+    /// (lihat `dosage::normalize_dosage`).
     pub dosage: String,
     /// Durasi, mis. `3 hari`.
     pub duration: String,
