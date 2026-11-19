@@ -4,6 +4,7 @@ members = [
     "crates/waras-core",
     "crates/waras-db",
     "crates/waras-api",
+    "crates/waras-bridge",
     "crates/waras-web",
     "crates/waras",
 ]
@@ -23,6 +24,10 @@ thiserror = "2.0.21"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 rand = "0.9.5"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+hmac = "0.12"
+base64 = "0.22"
+async-trait = "0.1"
 
 waras-core = { path = "crates/waras-core" }
 waras-db = { path = "crates/waras-db" }

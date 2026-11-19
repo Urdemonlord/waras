@@ -665,3 +665,119 @@ pub struct VisitDay {
     pub date: NaiveDate,
     pub count: i64,
 }
+
+// ---------------------------------------------------------------------------
+// Jembatan nasional (Fase 2): SEP, rujukan, kunjungan PCare, antrean online,
+// ketersediaan bed, klaim. Lihat docs/FASE2.md.
+// ---------------------------------------------------------------------------
+
+/// Status Surat Eligibilitas Peserta (SEP) VClaim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SepStatus {
+    Aktif,
+    Gagal,
+    Dibatalkan,
+}
+
+/// SEP VClaim. `sep_number` format desain: `SEP-20261119-001`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Sep {
+    /// Id lokal, sama dengan nomor SEP (`SEP-20261119-001`).
+    pub id: String,
+    pub sep_number: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    /// Nomor kartu BPJS peserta.
+    pub bpjs_number: String,
+    /// `RawatJalan` / `RawatInap`.
+    pub jenis: String,
+    pub poli: String,
+    pub status: SepStatus,
+    pub created_by: String,
+    pub created_at: NaiveDateTime,
+}
+
+/// Status rujukan keluar (VClaim).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferralStatus {
+    Terkirim,
+    Menunggu,
+    Ditolak,
+}
+
+/// Rujukan keluar ke faskes rujukan (mis. RSUD Dr. Kariadi).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Referral {
+    pub id: String,
+    pub patient_id: String,
+    pub from_poli: String,
+    pub to_facility: String,
+    pub reason: String,
+    pub status: ReferralStatus,
+    pub created_at: NaiveDateTime,
+}
+
+/// Kunjungan FKTP yang dicatat ke PCare.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PcareVisit {
+    pub id: String,
+    pub patient_id: String,
+    pub visit_date: NaiveDate,
+    pub poli: String,
+    /// `Tercatat` bila sudah dikirim ke PCare (via outbox).
+    pub status: String,
+    pub created_at: NaiveDateTime,
+}
+
+/// Booking antrean online dari Mobile JKN.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OnlineBooking {
+    /// Kode booking JKN, mis. `JKN-881201`.
+    pub id: String,
+    pub booking_code: String,
+    pub patient_id: String,
+    pub poli: String,
+    /// Estimasi jam, mis. `07.30`.
+    pub estimasi: String,
+    /// `Menunggu` / `Hadir`.
+    pub status: String,
+    /// Id antrean lokal bila sudah check-in (`A-041`).
+    pub local_queue_id: Option<String>,
+    pub created_at: NaiveDateTime,
+}
+
+/// Ketersediaan tempat tidur per kelas (cache lokal dari Aplicares).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BedAvailability {
+    /// `Kelas 1`, `Kelas 2`, `Kelas 3`, `VIP`, `ICU`.
+    pub class: String,
+    pub total: i64,
+    pub available: i64,
+    pub updated_at: NaiveDateTime,
+}
+
+/// Status klaim E-Klaim INA-CBG. Fase 2 hanya membangun adapter + alur
+/// submit/status; workbench Casemix penuh tetap Fase 3 (paper Bagian 6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimStatus {
+    Draft,
+    Terkirim,
+    Diterima,
+    Ditolak,
+}
+
+/// Berkas klaim satu tagihan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Claim {
+    pub id: String,
+    pub invoice_id: String,
+    pub sep_id: Option<String>,
+    pub ina_cbg_code: String,
+    pub amount: i64,
+    pub status: ClaimStatus,
+    pub submitted_at: Option<NaiveDateTime>,
+    pub created_at: NaiveDateTime,
+}
