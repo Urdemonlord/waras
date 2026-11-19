@@ -556,9 +556,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_job_is_not_reclaimed_until_operator_retry() {
-        // Kontrak §2: klaim hanya mengambil status Pending. Job Failed
-        // baru diproses lagi setelah retry operator (-> Pending).
+    async fn failed_job_is_reclaimed_once_retry_time_is_due() {
+        // Perilaku percobaan ulang otomatis (diperbaiki saat integrasi):
+        // job Failed dengan next_retry_at yang sudah lewat HARUS diklaim
+        // lagi oleh worker; sebelum waktunya, tidak. Tanpa ini, job
+        // macet sampai operator menekan retry manual.
         let db = seeded_db().await;
         let mut registry = BridgeRegistry::new();
         registry.register(Arc::new(FakeBridge::new(
@@ -569,12 +571,20 @@ mod tests {
         run_once(&db, &registry, &test_config(), now()).await;
         let job = db.list_outbox(None, None, 50).await.unwrap().into_iter().next().unwrap();
         assert_eq!(job.status, OutboxStatus::Failed);
-        // Pass kedua (waktu sudah lewat next_retry_at) tidak mengambilnya.
-        run_once(&db, &registry, &test_config(), now() + Duration::minutes(30)).await;
+        assert_eq!(job.attempts, 1);
+        // Backoff percobaan pertama: 2 menit (12:02).
+        assert_eq!(job.next_retry_at.as_deref(), Some("2026-11-19 12:02:00"));
+        // Sebelum waktunya (12:01): tidak diklaim.
+        run_once(&db, &registry, &test_config(), now() + Duration::minutes(1)).await;
         let job = db.list_outbox(None, None, 50).await.unwrap().into_iter().next().unwrap();
         assert_eq!(job.status, OutboxStatus::Failed);
         assert_eq!(job.attempts, 1);
-        // Retry operator -> Pending -> pass berikutnya mengambilnya.
+        // Sesudah waktunya (12:30): diklaim lagi, gagal lagi, attempts 2.
+        run_once(&db, &registry, &test_config(), now() + Duration::minutes(30)).await;
+        let job = db.list_outbox(None, None, 50).await.unwrap().into_iter().next().unwrap();
+        assert_eq!(job.status, OutboxStatus::Failed);
+        assert_eq!(job.attempts, 2);
+        // Retry operator tetap bekerja: kembali Pending, attempts 0.
         db.retry_outbox(&job.id).await.unwrap();
         let job = db.get_outbox(&job.id).await.unwrap().unwrap();
         assert_eq!(job.status, OutboxStatus::Pending);

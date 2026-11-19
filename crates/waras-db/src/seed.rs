@@ -662,6 +662,18 @@ async fn seed_fase2(db: &Db) -> Result<(), waras_core::WarasError> {
         .map_err(db_err)?;
     }
 
+    // Tautkan tagihan ke SEP lewat encounter (mengisi invoices.sep_id).
+    for (id, _patient, encounter, _bpjs, _jenis, _poli, _status) in seps {
+        if let Some(enc) = encounter {
+            sqlx::query("UPDATE invoices SET sep_id = ? WHERE encounter_id = ?")
+                .bind(id)
+                .bind(enc)
+                .execute(&db.pool)
+                .await
+                .map_err(db_err)?;
+        }
+    }
+
     // -- Antrean online (7): (booking, patient, poli, estimasi, status, local)
     let queue: [(&str, &str, &str, &str, &str, Option<&str>); 7] = [
         ("JKN-881201", "RM-000812", "Poli Umum", "07.30", "Hadir", Some("A-041")),

@@ -371,6 +371,7 @@ pub struct InvoiceRow {
     pub amount: i64,
     pub status: String,
     pub ina_cbg_code: Option<String>,
+    pub sep_id: Option<String>,
     pub created_at: String,
 }
 impl InvoiceRow {
@@ -384,6 +385,7 @@ impl InvoiceRow {
             amount: self.amount,
             status: invoice_status_from_str(&self.status)?,
             ina_cbg_code: self.ina_cbg_code,
+            sep_id: self.sep_id,
             created_at: parse_dt(&self.created_at)?,
         })
     }

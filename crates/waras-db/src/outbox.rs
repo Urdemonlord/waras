@@ -177,7 +177,7 @@ impl Db {
     ) -> Result<Vec<OutboxJob>, WarasError> {
         let rows: Vec<OutboxRow> = sqlx::query_as(
             "SELECT * FROM outbox
-             WHERE status = 'pending' AND (next_retry_at IS NULL OR next_retry_at <= ?)
+             WHERE status IN ('pending', 'failed') AND (next_retry_at IS NULL OR next_retry_at <= ?)
              ORDER BY created_at ASC, id ASC LIMIT ?",
         )
         .bind(now_iso)
@@ -200,7 +200,7 @@ impl Db {
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let rows: Vec<OutboxRow> = sqlx::query_as(
             "SELECT * FROM outbox
-             WHERE status = 'pending' AND (next_retry_at IS NULL OR next_retry_at <= ?)
+             WHERE status IN ('pending', 'failed') AND (next_retry_at IS NULL OR next_retry_at <= ?)
              ORDER BY created_at ASC, id ASC LIMIT ?",
         )
         .bind(now_iso)
@@ -211,12 +211,15 @@ impl Db {
         let updated_at = fmt_dt(now_naive());
         let mut jobs = Vec::with_capacity(rows.len());
         for row in rows {
-            // Guard `status = 'pending'` di WHERE: bila baris berubah di
-            // tengah transaksi (tidak mungkin di SQLite satu writer, tapi
-            // murah), jangan klaim dua kali.
+            // Guard status di WHERE: bila baris berubah di tengah
+            // transaksi (tidak mungkin di SQLite satu writer, tapi murah),
+            // jangan klaim dua kali. 'failed' ikut diklaim bila
+            // next_retry_at-nya sudah lewat: itulah percobaan ulang
+            // otomatis (worker menandai gagal sementara sebagai Failed +
+            // next_retry_at, bukan Dead).
             let n = sqlx::query(
                 "UPDATE outbox SET status = 'sending', updated_at = ?
-                 WHERE id = ? AND status = 'pending'",
+                 WHERE id = ? AND status IN ('pending', 'failed')",
             )
             .bind(&updated_at)
             .bind(&row.id)
@@ -526,6 +529,48 @@ mod tests {
         let pending = db.list_outbox(Some("pending"), None, 50).await.unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].idempotency_key, "k3");
+    }
+
+    #[tokio::test]
+    async fn failed_job_due_is_reclaimed_for_retry() {
+        // Lubang yang diperbaiki saat integrasi: pekerjaan Failed dengan
+        // next_retry_at yang sudah lewat HARUS bisa diklaim lagi oleh
+        // worker (percobaan ulang otomatis); bila tidak, ia macet sampai
+        // operator menekan retry manual.
+        let db = seeded_db().await;
+        db.enqueue_outbox(&job("k1", "RM-000812")).await.unwrap();
+        let claimed = db
+            .claim_outbox_batch_atomic(10, "2026-11-19 12:00:00")
+            .await
+            .unwrap();
+        assert_eq!(claimed.len(), 1);
+        let id = claimed[0].id.clone();
+        // Simulasi gagal sementara: Failed + coba lagi 2 menit kemudian.
+        db.mark_outbox_sent(
+            &id,
+            OutboxStatus::Failed,
+            None,
+            1,
+            Some("2026-11-19 12:02:00".into()),
+            Some("HTTP 500".into()),
+        )
+        .await
+        .unwrap();
+        // Sebelum waktunya: tidak diklaim.
+        assert!(db
+            .claim_outbox_batch_atomic(10, "2026-11-19 12:01:00")
+            .await
+            .unwrap()
+            .is_empty());
+        // Sesudah waktunya: diklaim lagi sebagai Sending.
+        let retry = db
+            .claim_outbox_batch_atomic(10, "2026-11-19 12:02:00")
+            .await
+            .unwrap();
+        assert_eq!(retry.len(), 1);
+        assert_eq!(retry[0].id, id);
+        assert_eq!(retry[0].status, OutboxStatus::Sending);
+        assert_eq!(retry[0].attempts, 1);
     }
 
     #[tokio::test]

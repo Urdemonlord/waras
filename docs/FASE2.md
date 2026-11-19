@@ -521,3 +521,42 @@ API Publik, Apotek Online BPJS (hanya disebut di desain; adapter
 menyusul bila dibutuhkan), dekripsi respons BPJS bila crate tidak
 resolve offline (lihat §3.3). JANGAN buat stub endpoint untuk itu —
 cukup tulis di README.
+
+## 9. Catatan integrasi (ditulis koordinator saat merge, 19 Nov 2026)
+
+- **Percobaan ulang otomatis diperbaiki.** Kontrak §2 menulis klaim
+  hanya mengambil `Pending`, sementara §4.1 menulis job `Failed`
+  dijadwalkan ulang lewat `next_retry_at` — keduanya tidak bisa benar
+  sekaligus: job Failed tidak pernah diklaim lagi. Perbaikan:
+  `claim_outbox_batch_atomic` + `claim_outbox_batch` mengambil
+  `status IN ('pending','failed')` yang `next_retry_at`-nya sudah
+  lewat. Test `failed_job_is_reclaimed_once_retry_time_is_due`
+  membuktikannya (gagal -> Failed, tidak diklaim sebelum waktunya,
+  diklaim lagi sesudahnya). Test lama yang menegaskan perilaku macet
+  (`failed_job_is_not_reclaimed_until_operator_retry`) diganti.
+- **Encounter ditutup mengirim satu resource Encounter, bukan Bundle**
+  (§4.2 dikoreksi): adapter SATUSEHAT memvalidasi payload `Encounter`
+  butuh `subject` tingkat atas (Bundle tidak punya -> Validation ->
+  Dead), dan sync-back `satusehat_id` hanya memetakan resource
+  `Encounter`. Kunci idempotensi tetap
+  `satusehat:Encounter:{enc}:closed`. Bundle lengkap tetap tersedia di
+  `GET /api/encounters/{id}/fhir`.
+- **`Invoice.sep_id` akhirnya diserialisasi.** Kolom sudah ada sejak
+  migrasi 0002, tapi tipe `Invoice` tidak membawanya, jadi handler
+  mencocokkan SEP-tagihan lewat encounter. Sekarang: field ada di
+  `waras-core::types::Invoice` + `InvoiceRow`, seed menautkan
+  `invoices.sep_id` lewat encounter, `GET /api/seps/{id}` dan
+  `POST /api/claims` memakai tautan langsung.
+- **SEP bisa terkirim dua kali ke BPJS** (batasan, lihat README):
+  nomor SEP lokal dibuat dulu, lalu worker mengirim ulang insert yang
+  sama karena adapter tidak punya lookup idempotensi. Perbaiki sebelum
+  live (cek "SEP sudah ada?" di adapter VClaim).
+- **Tanda tangan `mark_outbox_sent` (agen A):**
+  `(id, status, external_id, attempts, next_retry_at, last_error)` —
+  bukan `(id, outcome: &SendOutcome, …)` seperti draf kontrak, karena
+  `waras-db` tidak boleh bergantung ke `waras-bridge`. Worker memetakan
+  `SendOutcome` ke dua parameter itu.
+- **`GET /api/bridges` mengeja tujuan dua cara:** serialisasi serde
+  snake_case (`v_claim`, `p_care`, `e_klaim`) vs bentuk DB (`vclaim`,
+  `pcare`, `eklaim`). `dest_from_str` menerima keduanya; `list_outbox`
+  menormalisasi query ke bentuk DB. Ada test alias untuk ini.

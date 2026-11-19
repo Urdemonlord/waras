@@ -534,6 +534,8 @@ pub struct Invoice {
     pub status: InvoiceStatus,
     /// Kode grouping INA-CBG bila ada (Fase 1: boleh kosong).
     pub ina_cbg_code: Option<String>,
+    /// SEP terkait (Fase 2, diisi `link_invoice_sep`).
+    pub sep_id: Option<String>,
     pub created_at: NaiveDateTime,
 }
 

@@ -104,21 +104,72 @@ docs/CONTRACT.md  kontrak antar-crate + spesifikasi seed (sumber kebenaran)
 cargo test --offline
 ```
 
-52 tes: `waras-core` 9 (termasuk blokir penisilin + azithromycin lolos),
-`waras-db` 15 (seed, KPI, rantai audit, versi SOAP, dispensing),
-`waras-api` 25 (login, RBAC, alur penuh pasien→antrean→encounter→SOAP,
-resep diblokir 422 / diizinkan, bayar tagihan, bundle FHIR),
+117 tes: `waras-core` 16 (termasuk blokir penisilin + azithromycin
+lolos, FHIR AllergyIntolerance), `waras-db` 33 (seed, KPI, rantai
+audit, versi SOAP, dispensing, outbox idempotensi + klaim + retry
+otomatis), `waras-api` 45 (login, RBAC, alur penuh pasien→antrean→
+encounter→SOAP, resep diblokir 422 / diizinkan, bayar tagihan, bundle
+FHIR, worker + endpoint jembatan dengan stub), `waras-bridge` 20
+(OAuth2 + token cache, tanda tangan BPJS, envelope, dekripsi AES),
 `waras-web` 3 (aset tertanam).
 
-## Jembatan nasional (Fase 2, adapter saja)
+## Jembatan nasional (Fase 2) — SELESAI, terverifikasi dengan stub
 
-`waras-bridge` mengimplementasikan pengiriman SATUSEHAT (OAuth2 client
-credentials + POST FHIR, token di-cache, refresh sekali setelah 401,
-validasi profil sebelum kirim) dan BPJS (VClaim, PCare, Antrean Online,
+Fase 2 membangun pengiriman asinkron ke SATUSEHAT + BPJS lewat outbox
+dan worker latar (paper Bagian 4.2: tidak ada pengiriman sinkron di
+jalur transaksi klinis). Status per jembatan terlihat di UI
+(`/satusehat`, `/bpjs`, `/antrean-online`) dan semua angka dihitung
+dari tabel nyata.
+
+**Yang dibangun:** tabel `outbox` (idempotency key UNIQUE, status,
+backoff 2^attempts menit max 60, max 5 percobaan) + worker Tokio yang
+mengurasnya; adapter SATUSEHAT (OAuth2 client credentials, token
+di-cache, refresh sekali setelah 401, POST FHIR per resource, validasi
+profil sebelum kirim) dan BPJS (VClaim, PCare, Antrean Online,
 Aplicares, E-Klaim; header tanda tangan HMAC-SHA256, envelope
-`metaData`, dekripsi respons AES-256-CBC bila `response` terenkripsi).
-Semua pengujian memakai stub server lokal (axum, port ephemeral);
-tidak ada panggilan live.
+`metaData`, dekripsi respons AES-256-CBC bila `response` terenkripsi);
+endpoint jembatan (`/api/bridges`, `/api/outbox`, `/api/seps`,
+`/api/bpjs/peserta`, `/api/referrals`, `/api/pcare/visits`,
+`/api/antrean-online`, `/api/beds`, `/api/claims`,
+`/api/satusehat/resources`, `POST /api/encounters/{id}/close`);
+enqueue otomatis (pasien baru, vital, diagnosis, resep, encounter
+ditutup, SEP, rujukan, kunjungan PCare, klaim); kolom `satusehat_id` /
+`satusehat_status` per baris; seed Fase 2 (8 SEP, 7 booking JKN,
+5 kelas bed, 2 rujukan, 3 kunjungan PCare, 1 klaim draft).
+
+**Tidak ada koneksi live.** Tanpa kredensial, semua jembatan berstatus
+`Belum dikonfigurasi`, pekerjaan outbox tetap Pending (tanpa
+menghabiskan percobaan), dan endpoint yang butuh panggilan live
+menjawab 503 `BRIDGE_NOT_CONFIGURED`. Semua pengujian memakai stub
+server lokal (axum, port ephemeral); tidak ada panggilan live.
+
+**Untuk koneksi live, Arya harus menyediakan:** kredensial SATUSEHAT
+(client id + client secret + org id, dari portal SATUSEHAT) dan
+kredensial BPJS (cons id + secret key + user key, dari bridging BPJS),
+lalu mengisi env di bawah dan me-restart. Verifikasi dulu terhadap
+sandbox resmi SATUSEHAT dan BPJS sebelum mengaktifkan di produksi.
+
+```sh
+SATUSEHAT_ENABLED=true
+SATUSEHAT_BASE_URL=https://api-satusehat.kemkes.go.id/fhir-r4/v1
+SATUSEHAT_AUTH_URL=https://api-satusehat.kemkes.go.id/oauth2/v1
+SATUSEHAT_CLIENT_ID=CONTOH-CLIENT-ID        # PALSU, ganti dengan yang asli
+SATUSEHAT_CLIENT_SECRET=CONTOH-CLIENT-SECRET # PALSU
+SATUSEHAT_ORG_ID=CONTOH-ORG-ID              # PALSU
+BPJS_ENABLED=true
+BPJS_CONS_ID=12345                           # PALSU
+BPJS_SECRET_KEY=CONTOH-SECRET-KEY            # PALSU
+BPJS_USER_KEY=CONTOH-USER-KEY                # PALSU
+BPJS_VCLAIM_URL=https://apijkn.bpjs-kesehatan.go.id/vclaim-rest/
+BPJS_PCARE_URL=https://apijkn.bpjs-kesehatan.go.id/pcare-rest-v3.0/
+BPJS_ANTREAN_URL=https://apijkn.bpjs-kesehatan.go.id/antrean-rs/
+BPJS_APLICARES_URL=https://apijkn.bpjs-kesehatan.go.id/aplicaresws/
+BPJS_EKLAIM_URL=https://apijkn.bpjs-kesehatan.go.id/eklaim/
+WARAS_WORKER_ENABLED=true
+WARAS_WORKER_INTERVAL_SECS=10
+WARAS_WORKER_BATCH=10
+WARAS_OUTBOX_MAX_ATTEMPTS=5
+```
 
 **Pola bridging, bukan fakta terverifikasi:** path endpoint BPJS
 (mis. VClaim `SEP/2.0/insert`, `Peserta/nik/{nik}/tglSEP/{date}`;
@@ -134,22 +185,35 @@ offline dari cache; kontrak menyebut `aes 0.8`, yang tidak ada di
 cache). Round-trip enkripsi/dekripsi diuji, termasuk end-to-end lewat
 stub yang mengenkripsi respons dengan timestamp dari header request.
 
-**Idempotensi dijamin outbox, bukan adapter:** adapter mengirim ulang
-job yang sama sebagai HTTP baru; worker/outbox (agen A/C) yang
-mencegah duplikat lewat `idempotency_key`.
+**Batasan yang diketahui (jujur):**
+- **SEP bisa terkirim dua kali ke BPJS.** Nomor SEP lokal dibuat
+  dulu (`SEP-20261119-009`), lalu worker mengirim ulang insert SEP
+  yang sama (adapter tidak punya lookup idempotensi ke BPJS). Terhadap
+  stub teramati dua POST insert identik. Sebelum live, tambahkan cek
+  "SEP sudah ada?" di adapter VClaim.
+- **Encounter ditutup mengirim satu resource Encounter, bukan Bundle.**
+  Adapter SATUSEHAT menolak Bundle (tidak ada `subject` tingkat atas)
+  dan sync-back `satusehat_id` hanya memetakan resource `Encounter`;
+  bundle lengkap tetap tersedia di `GET /api/encounters/{id}/fhir`.
+- **Idempotensi dijamin outbox, bukan adapter:** adapter mengirim ulang
+  job yang sama sebagai HTTP baru; outbox yang mencegah duplikat lewat
+  `idempotency_key`.
+- **KPI jembatan dihitung dari data nyata** (bukan angka desain 12.480 /
+  96 / 182): SEP hari ini = 8 baris seed, kunjungan PCare = 3, resource
+  terkirim = jumlah outbox Acked. Kecil, tapi jujur.
+- **E-Klaim di Fase 2 hanya adapter + alur submit/status klaim.**
+  Workbench Casemix penuh (grouping INA-CBG) tetap Fase 3 (paper
+  Bagian 6). Kode INA-CBG di seed (`J-4-17-I`) adalah contoh, bukan
+  hasil grouping sungguhan.
 
-Contoh nilai kredensial (PALSU) ada di `docs/FASE2.md` §7.
+## Yang SENGAJA belum dibangun (Fase 3–4)
 
-## Yang SENGAJA belum dibangun (Fase 2–4)
-
-Jembatan nasional (SATUSEHAT/FHIR sinkronisasi, BPJS VClaim/PCare,
-Aplicares, Antrean Online, E-Klaim), IGD, Rawat Inap, Kamar Operasi &
-Bersalin, Laboratorium, Radiologi, Casemix, Inventori, Kepegawaian,
-Laporan & SIRS, Hemodialisa, Transfusi Darah, Gizi, Rekam Medis Gigi,
-Portal Pasien, API Publik. Seam yang sudah disiapkan: tipe FHIR di
-`waras-core`, helper `fhir::`, kolom `ina_cbg_code` di tagihan, dan
-struktur crate per modul. Lihat paper Bagian 3.4 (kriteria keluar fase)
-dan Bagian 10 (peta jalan).
+IGD, Rawat Inap, Kamar Operasi & Bersalin, Laboratorium, Radiologi,
+Casemix penuh (grouping INA-CBG), Inventori, Kepegawaian, Laporan &
+SIRS, Hemodialisa, Transfusi Darah, Gizi, Rekam Medis Gigi, Portal
+Pasien, API Publik. Jembatan nasional (SATUSEHAT + BPJS) sudah dibangun
+di Fase 2 (lihat bagian di atas); mode PostgreSQL adalah Fase 3. Lihat
+paper Bagian 3.4 (kriteria keluar fase) dan Bagian 10 (peta jalan).
 
 ## Penyimpangan dari desain (dicatat terbuka)
 

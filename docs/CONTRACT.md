@@ -327,6 +327,19 @@ draft v3 09.22.
   (BUKAN "Mode Rumah Sakit · PostgreSQL" seperti di desain — itu mode
   Fase 3; yang berjalan sekarang SQLite).
 
+## 7.5 Fase 2 (Jembatan Nasional) — lihat `docs/FASE2.md`
+
+Fase 2 (branch `fase-2-jembatan`) menambah: outbox + worker latar,
+adapter SATUSEHAT + BPJS (`waras-bridge`), endpoint jembatan
+(`/api/bridges`, `/api/outbox`, `/api/seps`, `/api/referrals`,
+`/api/pcare/visits`, `/api/antrean-online`, `/api/beds`, `/api/claims`,
+`/api/satusehat/resources`), endpoint baru `POST
+/api/encounters/{id}/close` (status -> Selesai + enqueue), aksi RBAC
+`ViewBridges/ManageOutbox/CreateSep/CreateReferral/CreateClaim/
+SyncBridges`, dan kolom `satusehat_id`/`satusehat_status` +
+`invoices.sep_id`. FASE2.md adalah sumber kebenaran Fase 2; dokumen
+ini tetap sumber kebenaran Fase 1.
+
 ## 7. Yang SENGAJA tidak dibangun (Fase 2–4)
 
 SATUSEHAT/FHIR sinkronisasi, BPJS (VClaim/PCare/Aplicares/Antrean Online/

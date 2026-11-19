@@ -512,18 +512,14 @@ pub async fn get_sep(
         .get_sep(&id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("SEP {id} tidak ditemukan")))?;
-    // Tagihan terkait: yang encounter-nya sama dengan encounter SEP.
-    // (`Invoice` tidak membawa kolom `sep_id`, jadi pencocokan lewat
-    // encounter — lihat juga `create_claim`.)
-    let invoice = match &sep.encounter_id {
-        Some(enc_id) => state
-            .db
-            .list_invoices(None)
-            .await?
-            .into_iter()
-            .find(|i| i.encounter_id.as_deref() == Some(enc_id.as_str())),
-        None => None,
-    };
+    // Tagihan terkait: yang sep_id-nya menunjuk SEP ini (kolom
+    // invoices.sep_id diisi saat SEP dibuat / di seed).
+    let invoice = state
+        .db
+        .list_invoices(None)
+        .await?
+        .into_iter()
+        .find(|i| i.sep_id.as_deref() == Some(sep.id.as_str()));
     let mut v = serde_json::to_value(&sep)?;
     v["invoice"] = serde_json::to_value(&invoice)?;
     Ok(Json(v))
@@ -960,20 +956,8 @@ pub async fn create_claim(
         .get_invoice(&body.invoice_id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("tagihan {} tidak ditemukan", body.invoice_id)))?;
-    // SEP diambil dari invoice bila ada. PENYIMPANGAN (keterbatasan
-    // tipe): `Invoice` tidak membawa kolom `sep_id` (disimpan DB tapi
-    // tidak diserialisasi), jadi SEP dicari lewat encounter tagihan di
-    // SEP hari ini. Bila tidak ada, klaim tetap dibuat tanpa SEP.
-    let sep_id = match &invoice.encounter_id {
-        Some(enc_id) => state
-            .db
-            .list_seps(&clinic_today().to_string())
-            .await?
-            .into_iter()
-            .find(|s| s.encounter_id.as_deref() == Some(enc_id.as_str()))
-            .map(|s| s.id),
-        None => None,
-    };
+    // SEP diambil dari tagihan bila ada (invoices.sep_id).
+    let sep_id = invoice.sep_id.clone();
     let claim = state
         .db
         .create_claim(&Claim {
