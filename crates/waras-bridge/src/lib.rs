@@ -13,6 +13,7 @@
 //! adapter selesai.
 
 pub mod bpjs;
+pub mod lzstring;
 pub mod satusehat;
 
 use std::collections::HashMap;
@@ -138,6 +139,8 @@ pub struct BpjsConfig {
     pub pcare_url: String,
     pub antrean_url: String,
     pub aplicares_url: String,
+    /// Kode PPK faskes (dipakai Aplicares `bed/read/{kodeppk}/...`).
+    pub kode_ppk: String,
     pub eklaim_url: String,
 }
 
@@ -218,8 +221,9 @@ impl BridgeConfig {
                 ),
                 aplicares_url: env_or(
                     "BPJS_APLICARES_URL",
-                    "https://apijkn.bpjs-kesehatan.go.id/aplicaresws/",
+                    "https://new-api.bpjs-kesehatan.go.id/aplicaresws/",
                 ),
+                kode_ppk: env_or("BPJS_KODE_PPK", ""),
                 eklaim_url: env_or(
                     "BPJS_EKLAIM_URL",
                     "https://apijkn.bpjs-kesehatan.go.id/eklaim/",

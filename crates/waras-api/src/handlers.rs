@@ -706,7 +706,9 @@ pub async fn close_encounter(
     // resource_type `Encounter` (bukan `Bundle`). Kombinasi literal
     // tabel selalu mati Validation dan tidak pernah menyimpan
     // `satusehat_id`. Jadi yang di-enqueue adalah resource Encounter
-    // tunggal (`fhir::encounter_resource`); bundle lengkap tetap tersedia
+    // tunggal (`fhir::encounter_resource_with_org`, identifier
+    // `http://sys-ids.kemkes.go.id/encounter/{org_id}` bila org id
+    // dikonfigurasi); bundle lengkap tetap tersedia
     // lewat GET /api/encounters/{id}/fhir.
     try_enqueue(
         &state.db,
@@ -715,7 +717,10 @@ pub async fn close_encounter(
             "Encounter",
             &encounter.id,
             &format!("satusehat:Encounter:{}:closed", encounter.id),
-            fhir::encounter_resource(&encounter),
+            fhir::encounter_resource_with_org(
+                &encounter,
+                &state.bridge_config.satusehat.org_id,
+            ),
             state.bridge_config.outbox_max_attempts,
         ),
     )

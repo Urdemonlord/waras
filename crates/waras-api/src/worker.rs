@@ -423,6 +423,7 @@ mod tests {
                 pcare_url: String::new(),
                 antrean_url: String::new(),
                 aplicares_url: String::new(),
+                kode_ppk: String::new(),
                 eklaim_url: String::new(),
             },
             worker_enabled: true,

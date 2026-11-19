@@ -505,7 +505,8 @@ BPJS_USER_KEY=                  # contoh PALSU: CONTOH-USER-KEY
 BPJS_VCLAIM_URL=https://apijkn.bpjs-kesehatan.go.id/vclaim-rest/
 BPJS_PCARE_URL=https://apijkn.bpjs-kesehatan.go.id/pcare-rest-v3.0/
 BPJS_ANTREAN_URL=https://apijkn.bpjs-kesehatan.go.id/antrean-rs/
-BPJS_APLICARES_URL=https://apijkn.bpjs-kesehatan.go.id/aplicaresws/
+BPJS_APLICARES_URL=https://new-api.bpjs-kesehatan.go.id/aplicaresws/
+BPJS_KODE_PPK=               # kode PPK faskes, dipakai Aplicares bed/read
 BPJS_EKLAIM_URL=https://apijkn.bpjs-kesehatan.go.id/eklaim/
 WARAS_WORKER_ENABLED=true
 WARAS_WORKER_INTERVAL_SECS=10
@@ -513,13 +514,21 @@ WARAS_WORKER_BATCH=10
 WARAS_OUTBOX_MAX_ATTEMPTS=5
 ```
 
+URL sandbox/dev (untuk pengujian sebelum produksi; pola URL sama,
+host berbeda): VClaim `https://apijkn-dev.bpjs-kesehatan.go.id/vclaim-rest-dev/`,
+PCare `https://apijkn-dev.bpjs-kesehatan.go.id/pcare-rest-dev-v3.0/`
+(belum terverifikasi — lihat §9), Antrean
+`https://apijkn-dev.bpjs-kesehatan.go.id/antreanrs_dev/`, Aplicares
+`https://dvlp.bpjs-kesehatan.go.id:8888/aplicaresws/`, SATUSEHAT staging
+`https://api-satusehat-stg.dto.kemkes.go.id/fhir-r4/v1` (auth
+`https://api-satusehat-stg.dto.kemkes.go.id/oauth2/v1`).
+
 ## 8. Yang SENGAJA tidak dibangun (Fase 3–4)
 
 Modul Casemix penuh (grouping INA-CBG, workbench pengkodean), migrasi
 PostgreSQL, IGD/Rawat Inap/Lab/Radiologi terstruktur, Portal Pasien,
 API Publik, Apotek Online BPJS (hanya disebut di desain; adapter
-menyusul bila dibutuhkan), dekripsi respons BPJS bila crate tidak
-resolve offline (lihat §3.3). JANGAN buat stub endpoint untuk itu —
+menyusul bila dibutuhkan). JANGAN buat stub endpoint untuk itu —
 cukup tulis di README.
 
 ## 9. Catatan integrasi (ditulis koordinator saat merge, 19 Nov 2026)
@@ -556,7 +565,117 @@ cukup tulis di README.
   bukan `(id, outcome: &SendOutcome, …)` seperti draf kontrak, karena
   `waras-db` tidak boleh bergantung ke `waras-bridge`. Worker memetakan
   `SendOutcome` ke dua parameter itu.
+  `invoices.sep_id` lewat encounter, `GET /api/seps/{id}` dan
+  `POST /api/claims` memakai tautan langsung.
+- **SEP bisa terkirim dua kali ke BPJS** (batasan, lihat README):
+  nomor SEP lokal dibuat dulu, lalu worker mengirim ulang insert yang
+  sama karena adapter tidak punya lookup idempotensi. Perbaiki sebelum
+  live (cek "SEP sudah ada?" di adapter VClaim).
+- **Tanda tangan `mark_outbox_sent` (agen A):**
+  `(id, status, external_id, attempts, next_retry_at, last_error)` —
+  bukan `(id, outcome: &SendOutcome, …)` seperti draf kontrak, karena
+  `waras-db` tidak boleh bergantung ke `waras-bridge`. Worker memetakan
+  `SendOutcome` ke dua parameter itu.
 - **`GET /api/bridges` mengeja tujuan dua cara:** serialisasi serde
   snake_case (`v_claim`, `p_care`, `e_klaim`) vs bentuk DB (`vclaim`,
   `pcare`, `eklaim`). `dest_from_str` menerima keduanya; `list_outbox`
   menormalisasi query ke bentuk DB. Ada test alias untuk ini.
+
+## 10. Verifikasi terhadap dokumen/sandbox resmi (20 Nov 2026)
+
+Verifikasi dilakukan tanpa kredensial live (hanya kredensial PALSU
+untuk probe). Portal developer resmi SATUSEHAT
+(`developer.satusehat.kemkes.go.id`) dan BPJS
+(`dvlp.bpjs-kesehatan.go.id`) ada di balik login/registrasi, jadi
+rujukan di bawah memakai dokumen publik + SDK/mirror yang sudah
+diuji terhadap sandbox resmi (disebut per baris). Semua perbaikan
+di bawah masuk commit verifikasi di branch `fase-2-jembatan`.
+
+### 10.1 Tabel konformansi
+
+| Area | Hasil | Perbaikan |
+|---|---|---|
+| SATUSEHAT staging auth `…/oauth2/v1/accesstoken`, grant `client_credentials`, Basic auth | COCOK | — |
+| SATUSEHAT FHIR base `…/fhir-r4/v1`, POST `/{ResourceType}`, Bearer, token cache + refresh sekali setelah 401 | COCOK | — |
+| Patient: identifier NIK `https://fhir.kemkes.go.id/id/nik` | COCOK | — |
+| Encounter `class`: tanpa `system` | MISMATCH → DIPERBAIKI | `class.system` = `http://terminology.hl7.org/CodeSystem/v3-ActCode` |
+| Encounter `identifier` `http://sys-ids.kemkes.go.id/encounter/{org_id}` | MISMATCH → DIPERBAIKI | `encounter_resource_with_org()`; `org_id` dari `SATUSEHAT_ORG_ID`, dipakai saat encounter ditutup |
+| Encounter `participant` (ATND Practitioner) + `serviceProvider` (Organization) | BELUM BISA — tidak ada Practitioner/Organization terdaftar di SATUSEHAT; jangan fabrikasi ID | — |
+| Observation: tanpa LOINC, tanpa `category`, `valueString` saja | MISMATCH → DIPERBAIKI | `category` vital-signs, kode LOINC per `VitalCode::loinc_code()` (BP panel 85354-9 + komponen 8480-6/8462-4, nadi 8867-4, suhu 8310-5, SpO2 59408-5, gula darah 2339-0), `valueQuantity` UCUM, fallback `valueString` bila nilai tak terparse |
+| Condition `clinicalStatus`: teks "Aktif" | MISMATCH → DIPERBAIKI | coding `condition-clinical` (`active`/`resolved`; Kronis → `active`) + `verificationStatus` confirmed + `category` encounter-diagnosis |
+| MedicationRequest: tanpa `intent` (FHIR R4 wajib) | MISMATCH → DIPERBAIKI | `"intent": "order"` |
+| `effectiveDateTime` / `recordedDate`: `NaiveDateTime::to_string()` (spasi, bukan dateTime FHIR) | MISMATCH → DIPERBAIKI | `fhir::fhir_datetime()` → `%Y-%m-%dT%H:%M:%S` |
+| MedicationRequest `medicationCodeableConcept`: teks saja, tanpa kode KFA | GAP — butuh data KFA | — |
+| Patient `meta.profile` | BELUM TERKONFIRMASI wajib/tidak | — |
+| Bundle `encounter_bundle`: type `collection` di-POST ke root | GAP laten — bukan interaksi batch/transaction FHIR; worker tidak pernah mengirim Bundle (hanya Encounter tunggal) | — |
+| BPJS signature: HMAC-SHA256(`cons_id&timestamp`), base64; header `X-cons-id`/`X-timestamp`/`X-signature`/`user_key`; timestamp detik Unix UTC | COCOK | — |
+| BPJS dekripsi: AES-256-CBC, kunci SHA-256(`cons_id+secret+timestamp`), IV 16 byte pertama kunci | COCOK (derivasi) | — |
+| BPJS dekripsi: plaintext masih LZString | MISMATCH → DIPERBAIKI | `waras-bridge/src/lzstring.rs` (port `lz-string` 1.5.0, `decompressFromEncodedURIComponent`); `decrypt_response` coba JSON mentah dulu, lalu LZString; vektor uji dari paket `lz-string` asli |
+| VClaim SEP insert: body datar, tanpa envelope | MISMATCH → DIPERBAIKI | adapter membungkus `{"request": {"t_sep": <payload>}}`; sama untuk SEP Batal (`t_sep`) dan Rujukan (`t_rujukan`); payload internal tetap datar |
+| VClaim SEP insert path `SEP/2.0/insert` | COCOK | — |
+| VClaim SEP: banyak field wajib 2.0 belum dikirim (ppkPelayanan, klsRawat, rujukan, diagAwal, poli sebagai objek, tujuanKunj, dpjpLayan, user, noTelp) | GAP — butuh config faskes + field form | — |
+| VClaim SEP delete path `SEP/delete` | BELUM TERKONFIRMASI | — |
+| VClaim Rujukan insert path `Rujukan/insert` | BELUM TERKONFIRMASI | — |
+| PCare: body datar JSON (tanpa envelope `request`) | COCOK (pola umum) | — |
+| PCare `kunjungan`: path + nama field | BELUM TERKONFIRMASI (dokumen tidak didapat) | — |
+| Antrean `antrean/add` + `antrean/batal` | BELUM TERKONFIRMASI (dokumen resmi minta ~25 field; WARAS kirim 5) | — |
+| Aplicares base `https://apijkn.bpjs-kesehatan.go.id/aplicaresws/` + `GET bed/get` | MISMATCH → DIPERBAIKI | base default → `https://new-api.bpjs-kesehatan.go.id/aplicaresws/` (dev `https://dvlp.bpjs-kesehatan.go.id:8888/`); path → `GET rest/bed/read/{kodeppk}/1/100`; env baru `BPJS_KODE_PPK`; `refresh_beds` terima `kodekelas` (huruf kecil) + `kapasitas` sebagai total; kode kelas dipetakan ke nama UI ("1" → "Kelas 1") |
+| E-Klaim `POST klaim/submit` ke `https://apijkn.bpjs-kesehatan.go.id/eklaim/` | MISMATCH — endpoint BPJS-hosted itu TIDAK ADA | TIDAK DIPERBAIKI (butuh redesign, bukan tambal URL): E-Klaim asli adalah aplikasi lokal `ws.php` (kunci enkripsi simetris sendiri) atau alur FHIR Claim via SATUSEHAT. Adapter E-Klaim **belum siap live**; jangan aktifkan. |
+| BPJS `health()` = Offline saat dikonfigurasi | MASIH — tidak ada endpoint probe tanpa efek samping yang dijamin ada di kelima layanan; status live dinilai dari hasil outbox | — |
+
+### 10.2 Live probe (kredensial PALSU, tanpa token/kunci asli)
+
+- SATUSEHAT staging FHIR `GET https://api-satusehat-stg.dto.kemkes.go.id/fhir-r4/v1/Patient`
+  (tanpa auth) → **401** `OperationOutcome` (`code: invalid-access-token`,
+  `details: "Invalid Access Token."`). Host staging FHIR **live**, bentuk
+  error 401 sesuai yang diharapkan adapter.
+- SATUSEHAT staging token `POST …/oauth2/v1/accesstoken` (Basic
+  `FAKE-CLIENT-ID:FAKE-CLIENT-SECRET`, `grant_type=client_credentials`)
+  → **429** `OperationOutcome` (`code: throttled`, "Authentication
+  temporarily cannot be performed due to the rate limit policy. Please
+  retry later."). Endpoint **live** (kebijakan rate limit 1 req/menit
+  per client terdokumentasi; throttle terjadi sebelum validasi
+  kredensial, jadi `invalid_client` belum teramati — butuh client id
+  asli atau IP yang belum ter-throttle). Probe pertama sempat 000
+  (timeout koneksi), ulangan konsisten 429.
+- BPJS (`apijkn.bpjs-kesehatan.go.id`, `apijkn-dev.bpjs-kesehatan.go.id`,
+  `new-api.bpjs-kesehatan.go.id`): DNS resolve, TLS handshake sukses,
+  tapi **tidak ada respons HTTP dalam 20–30 detik** (curl 000/timeout)
+  dari jaringan sandbox ini, termasuk `GET /` polos. Bukan putusan
+  tentang URL-nya — probe BPJS **terblokir jaringan sandbox**, jadi
+  konformansi BPJS di atas bersandar pada dokumen, bukan probe live.
+  Ulangi probe BPJS dari VPS / jaringan lain sebelum live.
+
+### 10.3 Dokumen yang dipakai
+
+- SATUSEHAT: DeepWiki @ssecd/ihs (`deepwiki.com/ssecd/ihs/6.1-satusehat-platform`,
+  `…/9-api-reference`), SDK @harizinside/satusehat (npm/jsr), OpenFn SATUSEHAT
+  adaptor docs (`docs.openfn.org/adaptors/satusehat`), koleksi Postman SATUSEHAT
+  (contoh Encounter + Observation vital-signs), playbook Klaim BPJS SATUSEHAT
+  (`satusehat.kemkes.go.id/platform/docs/id/interoperability/klaim-bpjs/`).
+- BPJS: ssecd/jkn DeepWiki (`deepwiki.com/ssecd/jkn/3.1-authentication-and-security`,
+  `…/4-vclaim-service`), `dedenbangkit/bpjs-vclaim` (`bpjs.py`),
+  `morizbebenk/flask-bpjs` (README, envelope `t_sep`), panduan VClaim
+  nugrohosetiawan.com + matthewswong.com, gist bridging Aplicares RSUD Al Ihsan
+  (`gist.github.com/denihida1216/4049a242ccd9c9ceee23f162ef0ee4a4`),
+  Manual Web Service E-Klaim 5.10.x (`inacbg.kemkes.go.id`), materi bridging
+  VClaim 2.0 (slideshare), `lz-string` 1.5.0 (npm, vektor uji).
+- FHIR R4: `build.fhir.org/observation-vitalsigns.html` (profil vital signs:
+  `category` vital-signs + LOINC + `valueQuantity` UCUM), contoh Observation
+  SATUSEHAT di Postman (nadi 8867-4), deck bridging Satu Sehat (LOINC TTV:
+  sistolik 8480-6, diastolik 8462-4, nadi 8867-4, suhu 8310-5).
+
+### 10.4 Yang masih butuh kredensial Arya (uji sandbox live)
+
+- SATUSEHAT: `client id` + `client secret` + `org id` (dari portal
+  SATUSEHAT / Kemenkes). Dengan itu: token staging asli → POST
+  Patient/Encounter/Observation sungguhan ke staging → validasi profil
+  SATUSEHAT → `participant`/`serviceProvider` + `meta.profile` +
+  kode KFA bisa dikonfirmasi.
+- BPJS: `cons id` + `secret key` + `user key` (dari bridging BPJS).
+  Dengan itu: VClaim dev (eligibilitas, SEP insert/batal, rujukan),
+  PCare dev (kunjungan + field), Antrean dev (add/batal + field
+  lengkap), Aplicares (`bed/read` + `ref/kelas`), dan dekripsi
+  LZString terhadap respons enkripsi asli.
+- **SEP double-submit tetap terbuka** (lihat §9 + README): perbaikan
+  terpisah, masih wajib sebelum live.

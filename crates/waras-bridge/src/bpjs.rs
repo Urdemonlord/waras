@@ -4,17 +4,25 @@
 //! X-signature HMAC-SHA256, user_key) dibangun di sini, dipakai semua
 //! layanan.
 //!
-//! **Path endpoint adalah pola bridging yang umum** (lihat `send`):
-//! belum pernah diverifikasi ke dokumen bridging resmi BPJS karena tidak
-//! ada akses live/kredensial saat build. Verifikasi ulang path, nama field
-//! request, dan bentuk `response` ke dokumen bridging resmi saat
-//! kredensial live tersedia, sebelum mengaktifkan di produksi.
+//! **Status verifikasi per layanan (2026-11-20, melawan dokumen bridging
+//! resmi — lihat docs/FASE2.md §9):** tanda tangan + dekripsi AES-256-CBC
+//! + LZString terverifikasi; path VClaim `SEP/2.0/insert` + envelope
+//! `{"request": {"t_sep": ...}}` terverifikasi; path Aplicares
+//! `rest/bed/read/{kodeppk}/{start}/{limit}` di host
+//! `new-api.bpjs-kesehatan.go.id` terverifikasi. Path `SEP/delete`,
+//! `Rujukan/insert`, dan seluruh PCare/Antrean masih pola umum yang
+//! belum terverifikasi ke dokumen resmi. **E-Klaim: endpoint
+//! `klaim/submit` di host BPJS TIDAK ADA** — integrasi E-Klaim asli
+//! memakai `ws.php` lokal atau alur FHIR Claim SATUSEHAT; adapter ini
+//! belum siap live (lihat FASE2.md §9).
 //!
 //! Respons BPJS dibungkus envelope `{ metaData: {code, message},
 //! response }`; `code == "200"` = sukses. Bila `response` berupa string,
 //! itu ciphertext AES-256-CBC yang didekripsi dengan
 //! [`decrypt_response`] (kunci = SHA-256 mentah dari
-//! `cons_id + secret_key + timestamp`, IV = 16 byte pertama kunci).
+//! `cons_id + secret_key + timestamp`, IV = 16 byte pertama kunci),
+//! lalu plaintext-nya masih dikompresi LZString
+//! (`decompressFromEncodedURIComponent`, lihat [`crate::lzstring`]).
 //! Bila `response` sudah berupa objek JSON (mis. di stub pengujian),
 //! dipakai langsung.
 
@@ -164,10 +172,11 @@ pub fn bpjs_headers(
 ///
 /// Kunci = SHA-256 mentah (32 byte) dari string
 /// `cons_id + secret_key + timestamp`; IV = 16 byte pertama kunci;
-/// ciphertext = base64. Mengembalikan JSON hasil dekripsi.
-///
-/// Pola ini adalah pola bridging BPJS yang umum dipakai; verifikasi ulang
-/// ke dokumen bridging resmi saat kredensial live tersedia.
+/// ciphertext = base64. Plaintext hasil dekripsi masih dikompresi
+/// LZString (`compressToEncodedURIComponent`) di server BPJS asli, jadi
+/// setelah AES: coba parse JSON langsung dulu (kompatibel dengan stub
+/// pengujian), bila gagal coba dekompresi LZString dulu baru parse.
+/// Mengembalikan JSON hasil dekripsi.
 pub fn decrypt_response(
     ciphertext_b64: &str,
     cons_id: &str,
@@ -195,8 +204,18 @@ pub fn decrypt_response(
     let text = String::from_utf8(plaintext).map_err(|_| {
         BridgeError::Unexpected("plaintext respons BPJS bukan UTF-8".to_string())
     })?;
-    serde_json::from_str(&text)
-        .map_err(|_| BridgeError::Unexpected("plaintext respons BPJS bukan JSON".to_string()))
+    if let Ok(v) = serde_json::from_str::<Value>(&text) {
+        return Ok(v);
+    }
+    // Server BPJS asli mengembalikan plaintext terkompresi LZString.
+    if let Some(decompressed) = crate::lzstring::decompress_from_encoded_uri_component(&text) {
+        if let Ok(v) = serde_json::from_str::<Value>(&decompressed) {
+            return Ok(v);
+        }
+    }
+    Err(BridgeError::Unexpected(
+        "plaintext respons BPJS bukan JSON".to_string(),
+    ))
 }
 
 /// Bila `response` envelope berupa string, dekripsi dulu; bila sudah
@@ -297,6 +316,15 @@ fn pick_str(response: &Value, paths: &[&str]) -> Option<String> {
     None
 }
 
+/// Bungkus payload VClaim dalam envelope resmi:
+/// `{"request": {"t_sep": {...}}}` atau `{"request": {"t_rujukan": {...}}}`.
+/// Payload internal (outbox + handler) tetap datar; pembungkusan hanya
+/// terjadi di sini, saat request dibangun. Sumber: dokumen bridging
+/// VClaim 2.0 / README flask-bpjs.
+fn vclaim_envelope(kind: &str, payload: &Value) -> Value {
+    serde_json::json!({ "request": { kind: payload } })
+}
+
 #[async_trait::async_trait]
 impl Bridge for BpjsBridge {
     fn destination(&self) -> OutboxDestination {
@@ -323,8 +351,9 @@ impl Bridge for BpjsBridge {
         // saat kredensial live tersedia (lihat docs modul).
         match (self.destination, job.resource_type.as_str()) {
             (OutboxDestination::VClaim, "SEP") => {
+                let body = vclaim_envelope("t_sep", &job.payload);
                 let resp = self
-                    .call(Method::POST, "SEP/2.0/insert", Some(&job.payload))
+                    .call(Method::POST, "SEP/2.0/insert", Some(&body))
                     .await?;
                 let response = resp.unwrap_or(Value::Null);
                 Ok(SendOutcome {
@@ -338,7 +367,8 @@ impl Bridge for BpjsBridge {
                     .as_str()
                     .or_else(|| job.payload["sep"]["noSep"].as_str())
                     .map(|s| s.to_string());
-                self.call(Method::DELETE, "SEP/delete", Some(&job.payload))
+                let body = vclaim_envelope("t_sep", &job.payload);
+                self.call(Method::DELETE, "SEP/delete", Some(&body))
                     .await?;
                 Ok(SendOutcome {
                     external_id: no_sep,
@@ -372,8 +402,9 @@ impl Bridge for BpjsBridge {
                 })
             }
             (OutboxDestination::VClaim, "Rujukan") => {
+                let body = vclaim_envelope("t_rujukan", &job.payload);
                 let resp = self
-                    .call(Method::POST, "Rujukan/insert", Some(&job.payload))
+                    .call(Method::POST, "Rujukan/insert", Some(&body))
                     .await?;
                 let response = resp.unwrap_or(Value::Null);
                 Ok(SendOutcome {
@@ -441,8 +472,22 @@ impl Bridge for BpjsBridge {
             }
             (OutboxDestination::Aplicares, "Bed") => {
                 // Refresh cache ketersediaan bed: GET tanpa efek samping.
+                // Endpoint resmi: GET aplicaresws/rest/bed/read/{kodeppk}/
+                // {start}/{limit} di host new-api.bpjs-kesehatan.go.id.
                 // Daftar bed dikembalikan di `note` untuk disimpan worker.
-                let resp = self.call(Method::GET, "bed/get", None).await?;
+                let kode_ppk = self.config.kode_ppk.trim();
+                if kode_ppk.is_empty() {
+                    return Err(BridgeError::Validation(
+                        "Aplicares: BPJS_KODE_PPK belum diisi (kode PPK faskes)".to_string(),
+                    ));
+                }
+                let resp = self
+                    .call(
+                        Method::GET,
+                        &format!("rest/bed/read/{kode_ppk}/1/100"),
+                        None,
+                    )
+                    .await?;
                 let response = resp.unwrap_or(Value::Null);
                 Ok(SendOutcome {
                     external_id: None,
@@ -547,7 +592,7 @@ mod tests {
         if path.contains("SEP/2.0/insert") {
             json!({"sep": {"noSep": "SEP-CONTOH-001"}})
         } else if path.contains("SEP/delete") {
-            json!({"noSep": body["noSep"].as_str().unwrap_or("SEP-CONTOH-001")})
+            json!({"noSep": body["request"]["t_sep"]["noSep"].as_str().unwrap_or("SEP-CONTOH-001")})
         } else if path.contains("Peserta/nik/") {
             json!({"peserta": {"noKartu": "0001234567890", "nama": "Siti Rahmawati"}})
         } else if path.contains("Rujukan/insert") {
@@ -558,10 +603,12 @@ mod tests {
             json!({"noKartu": "0001234567890", "nama": "Siti Rahmawati"})
         } else if path.contains("antrean/add") || path.contains("antrean/batal") {
             json!({"kodebooking": "JKN-CONTOH-001"})
-        } else if path.contains("bed/get") {
+        } else if path.contains("rest/bed/read/") {
+            // Bentuk respons Aplicares asli: field huruf kecil, kapasitas
+            // = total tempat tidur kelas itu.
             json!({"list": [
-                {"kodeKelas": "Kelas 1", "total": 16, "tersedia": 12},
-                {"kodeKelas": "Kelas 2", "total": 32, "tersedia": 24}
+                {"kodekelas": "1", "koderuang": "R001", "namaruang": "Mawar", "kapasitas": 16, "tersedia": 12, "tersediapria": 6, "tersediawanita": 6, "tersediapriawanita": 0},
+                {"kodekelas": "2", "koderuang": "R002", "namaruang": "Melati", "kapasitas": 32, "tersedia": 24, "tersediapria": 12, "tersediawanita": 12, "tersediapriawanita": 0}
             ]})
         } else if path.contains("klaim/submit") {
             json!({"claim_id": "CLM-CONTOH-001"})
@@ -638,6 +685,7 @@ mod tests {
             pcare_url: format!("http://{addr}/pcare-rest-v3.0/"),
             antrean_url: format!("http://{addr}/antrean-rs/"),
             aplicares_url: format!("http://{addr}/aplicaresws/"),
+            kode_ppk: "1234567".to_string(),
             eklaim_url: format!("http://{addr}/eklaim/"),
         };
         (state, config)
@@ -702,6 +750,17 @@ mod tests {
     }
 
     #[test]
+    fn dekripsi_lzstring_setelah_aes() {
+        // Plaintext hasil dekripsi AES di server BPJS asli masih
+        // terkompresi LZString; vektor ini dihasilkan paket lz-string
+        // 1.5.0 asli (lihat crates/waras-bridge/src/lzstring.rs).
+        let compressed = "N4IgzgpgDiBcoDsD2BlacQoKIAUC0AwgPIByAKkQBJ4AMNAjCAL5NA";
+        let ct = encrypt_for_test(compressed, CONS_ID, SECRET, 1700000000);
+        let back = decrypt_response(&ct, CONS_ID, SECRET, 1700000000).unwrap();
+        assert_eq!(back["sep"]["noSep"], "SEP-CONTOH-001");
+    }
+
+    #[test]
     fn envelope_200_ok_non200_dipetakan() {
         let ok = json!({"metaData": {"code": "200", "message": "OK"}, "response": {"a": 1}});
         assert_eq!(envelope_response(&ok).unwrap().unwrap()["a"], 1);
@@ -741,7 +800,7 @@ mod tests {
         let req = &state.requests()[0];
         assert_eq!(req.method, "POST");
         assert!(req.path.contains("SEP/2.0/insert"), "path: {}", req.path);
-        assert_eq!(req.body["noKartu"], "0001234567890", "body SEP ikut terekam");
+        assert_eq!(req.body["request"]["t_sep"]["noKartu"], "0001234567890", "body SEP ikut terekam dalam envelope t_sep");
         assert_eq!(header(req, "x-cons-id"), Some(CONS_ID));
         assert_eq!(header(req, "user_key"), Some(USER_KEY));
         // Signature bisa dihitung ulang dari timestamp yang tercatat.
@@ -795,7 +854,7 @@ mod tests {
 
     #[tokio::test]
     async fn bed_refresh_mengembalikan_daftar_di_note() {
-        let (_state, config) = spawn_stub().await;
+        let (state, config) = spawn_stub().await;
         let b = bridge(OutboxDestination::Aplicares, &config);
         let out = b
             .send(&job(OutboxDestination::Aplicares, "Bed", json!({})))
@@ -803,10 +862,34 @@ mod tests {
             .unwrap();
         assert_eq!(out.status, OutboxStatus::Sent);
         assert!(out.external_id.is_none());
+        let req = &state.requests()[0];
+        assert_eq!(req.method, "GET");
+        assert!(
+            req.path.contains("rest/bed/read/1234567/1/100"),
+            "path: {}",
+            req.path
+        );
         let note = out.note.expect("note harus berisi daftar bed");
         let beds: Value = serde_json::from_str(&note).unwrap();
-        assert_eq!(beds["list"][0]["kodeKelas"], "Kelas 1");
+        assert_eq!(beds["list"][0]["kodekelas"], "1");
+        assert_eq!(beds["list"][0]["kapasitas"], 16);
         assert_eq!(beds["list"][0]["tersedia"], 12);
+    }
+
+    #[tokio::test]
+    async fn bed_tanpa_kode_ppk_ditolak_validasi() {
+        let (_state, config) = spawn_stub().await;
+        let mut config = config.clone();
+        config.kode_ppk = String::new();
+        let b = bridge(OutboxDestination::Aplicares, &config);
+        let err = b
+            .send(&job(OutboxDestination::Aplicares, "Bed", json!({})))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, BridgeError::Validation(_)),
+            "dapat {err:?}"
+        );
     }
 
     #[tokio::test]

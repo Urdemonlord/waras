@@ -207,6 +207,30 @@ impl VitalCode {
             VitalCode::GulaDarah => "mg/dL",
         }
     }
+
+    /// Kode LOINC (http://loinc.org) untuk Observation SATUSEHAT.
+    /// Tekanan darah memakai panel 85354-9 dengan komponen sistolik
+    /// 8480-6 + diastolik 8462-4 (lihat `fhir::observation_resource`).
+    pub fn loinc_code(&self) -> &'static str {
+        match self {
+            VitalCode::TekananDarah => "85354-9",
+            VitalCode::Nadi => "8867-4",
+            VitalCode::Suhu => "8310-5",
+            VitalCode::SpO2 => "59408-5",
+            VitalCode::GulaDarah => "2339-0",
+        }
+    }
+
+    /// Kode unit UCUM (http://unitsofmeasure.org) untuk `valueQuantity`.
+    pub fn ucum_code(&self) -> &'static str {
+        match self {
+            VitalCode::TekananDarah => "mm[Hg]",
+            VitalCode::Nadi => "/min",
+            VitalCode::Suhu => "Cel",
+            VitalCode::SpO2 => "%",
+            VitalCode::GulaDarah => "mg/dL",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -36,6 +36,7 @@ fn disabled_config() -> BridgeConfig {
             pcare_url: "http://127.0.0.1:9/pcare-rest-v3.0/".into(),
             antrean_url: "http://127.0.0.1:9/antrean-rs/".into(),
             aplicares_url: "http://127.0.0.1:9/aplicaresws/".into(),
+            kode_ppk: String::new(),
             eklaim_url: "http://127.0.0.1:9/eklaim/".into(),
         },
         worker_enabled: false,
@@ -927,7 +928,7 @@ fn bpjs_canned_response(path: &str, body: &Value) -> Value {
     if path.contains("SEP/2.0/insert") {
         json!({"sep": {"noSep": "SEP-CONTOH-001"}})
     } else if path.contains("SEP/delete") {
-        json!({"noSep": body["noSep"].as_str().unwrap_or("SEP-CONTOH-001")})
+        json!({"noSep": body["request"]["t_sep"]["noSep"].as_str().unwrap_or("SEP-CONTOH-001")})
     } else if path.contains("Peserta/nik/") {
         json!({"peserta": {"noKartu": "0001234567890", "nama": "Siti Rahmawati"}})
     } else if path.contains("Rujukan/insert") {
@@ -938,10 +939,11 @@ fn bpjs_canned_response(path: &str, body: &Value) -> Value {
         json!({"noKartu": "0001234567890", "nama": "Siti Rahmawati"})
     } else if path.contains("antrean/add") || path.contains("antrean/batal") {
         json!({"kodebooking": "JKN-CONTOH-001"})
-    } else if path.contains("bed/get") {
+    } else if path.contains("rest/bed/read/") {
+        // Bentuk respons Aplicares asli (field huruf kecil).
         json!({"list": [
-            {"kodeKelas": "Kelas 1", "total": 16, "tersedia": 12},
-            {"kodeKelas": "Kelas 2", "total": 32, "tersedia": 24},
+            {"kodekelas": "1", "koderuang": "R001", "namaruang": "Mawar", "kapasitas": 16, "tersedia": 12, "tersediapria": 6, "tersediawanita": 6, "tersediapriawanita": 0},
+            {"kodekelas": "2", "koderuang": "R002", "namaruang": "Melati", "kapasitas": 32, "tersedia": 24, "tersediapria": 12, "tersediawanita": 12, "tersediapriawanita": 0},
         ]})
     } else if path.contains("klaim/submit") {
         json!({"claim_id": "CLM-CONTOH-001"})
@@ -1017,6 +1019,7 @@ fn bpjs_stub_config(addr: SocketAddr) -> BridgeConfig {
         pcare_url: format!("http://{addr}/pcare-rest-v3.0/"),
         antrean_url: format!("http://{addr}/antrean-rs/"),
         aplicares_url: format!("http://{addr}/aplicaresws/"),
+        kode_ppk: "1234567".into(),
         eklaim_url: format!("http://{addr}/eklaim/"),
     };
     c
@@ -1760,5 +1763,5 @@ async fn antrean_sync_and_beds_refresh_via_stub_bpjs() {
     assert!(stub
         .requests()
         .iter()
-        .any(|(_, p, _)| p.contains("bed/get")));
+        .any(|(_, p, _)| p.contains("rest/bed/read/1234567/1/100")));
 }

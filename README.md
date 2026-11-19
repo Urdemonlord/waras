@@ -163,7 +163,8 @@ BPJS_USER_KEY=CONTOH-USER-KEY                # PALSU
 BPJS_VCLAIM_URL=https://apijkn.bpjs-kesehatan.go.id/vclaim-rest/
 BPJS_PCARE_URL=https://apijkn.bpjs-kesehatan.go.id/pcare-rest-v3.0/
 BPJS_ANTREAN_URL=https://apijkn.bpjs-kesehatan.go.id/antrean-rs/
-BPJS_APLICARES_URL=https://apijkn.bpjs-kesehatan.go.id/aplicaresws/
+BPJS_APLICARES_URL=https://new-api.bpjs-kesehatan.go.id/aplicaresws/
+BPJS_KODE_PPK=1234567                          # PALSU, kode PPK faskes
 BPJS_EKLAIM_URL=https://apijkn.bpjs-kesehatan.go.id/eklaim/
 WARAS_WORKER_ENABLED=true
 WARAS_WORKER_INTERVAL_SECS=10
@@ -171,14 +172,34 @@ WARAS_WORKER_BATCH=10
 WARAS_OUTBOX_MAX_ATTEMPTS=5
 ```
 
-**Pola bridging, bukan fakta terverifikasi:** path endpoint BPJS
-(mis. VClaim `SEP/2.0/insert`, `Peserta/nik/{nik}/tglSEP/{date}`;
-PCare `kunjungan`; Antrean `antrean/add`; Aplicares `bed/get`; E-Klaim
-`klaim/submit`) dan skema dekripsi AES-256-CBC (kunci = SHA-256 mentah
-dari `cons_id + secret_key + timestamp`, IV = 16 byte pertama kunci)
-adalah pola bridging yang umum. Semuanya harus diverifikasi ulang ke
-dokumen bridging resmi BPJS saat kredensial live tersedia, sebelum
-diaktifkan di produksi. Jangan klaim path ini sudah terverifikasi.
+**Terverifikasi terhadap dokumen/sandbox resmi (20 Nov 2026, lihat
+`docs/FASE2.md` §10):** tanda tangan HMAC-SHA256 + header BPJS COCOK;
+dekripsi AES-256-CBC COCOK (derivasi kunci/IV), plus langkah LZString
+yang sebelumnya hilang — plaintext respons BPJS asli masih terkompresi
+`compressToEncodedURIComponent`, kini didekompresi
+(`crates/waras-bridge/src/lzstring.rs`, vektor uji dari paket
+`lz-string` 1.5.0 asli); VClaim `SEP/2.0/insert` COCOK + envelope
+`{"request": {"t_sep": …}}` (juga SEP Batal + Rujukan `t_rujukan`);
+Aplicares DIPERBAIKI ke host `new-api.bpjs-kesehatan.go.id` +
+`GET rest/bed/read/{kodeppk}/1/100` (sebelumnya host + path salah);
+builder FHIR DIPERBAIKI ke profil SATUSEHAT (Encounter `class.system` +
+`identifier` org, Observation LOINC + `category` vital-signs +
+`valueQuantity` UCUM, Condition coding `active`/`resolved`,
+MedicationRequest `intent: order`, dateTime format `T`). Probe live
+(tanpa kredensial asli): SATUSEHAT staging FHIR 401 `invalid-access-token`
+dan token endpoint 429 throttled (keduanya membuktikan host + bentuk
+error); probe BPJS terblokir jaringan sandbox (TLS nyambung, HTTP
+timeout 20–30 dtk) — ulangi dari VPS sebelum live.
+
+**Belum terverifikasi / masih gap:** path `SEP/delete`,
+`Rujukan/insert`, seluruh PCare `kunjungan` (path + field), Antrean
+(field lengkap), `participant`/`serviceProvider` Encounter, kode KFA,
+`meta.profile` Patient, tipe Bundle. **E-Klaim: endpoint
+`klaim/submit` di host BPJS TIDAK ADA** — E-Klaim asli memakai `ws.php`
+lokal atau alur FHIR Claim via SATUSEHAT; adapter E-Klaim belum siap
+live, jangan aktifkan. Field wajib SEP 2.0 yang belum dikirim
+(ppkPelayanan, klsRawat, diagAwal, dpjpLayan, dsb.) butuh config faskes
++ field form (tugas lanjutan).
 
 **Dekripsi diimplementasikan** (`aes 0.9` + `cbc 0.2`, keduanya resolve
 offline dari cache; kontrak menyebut `aes 0.8`, yang tidak ada di
@@ -201,10 +222,19 @@ stub yang mengenkripsi respons dengan timestamp dari header request.
 - **KPI jembatan dihitung dari data nyata** (bukan angka desain 12.480 /
   96 / 182): SEP hari ini = 8 baris seed, kunjungan PCare = 3, resource
   terkirim = jumlah outbox Acked. Kecil, tapi jujur.
-- **E-Klaim di Fase 2 hanya adapter + alur submit/status klaim.**
+- **E-Klaim di Fase 2 hanya adapter + alur submit/status klaim — dan
+  adapter itu BELUM SIAP LIVE** (endpoint `klaim/submit` di host BPJS
+  tidak ada; integrasi asli memakai `ws.php` lokal atau alur FHIR
+  Claim via SATUSEHAT — redesign, lihat `docs/FASE2.md` §10).
   Workbench Casemix penuh (grouping INA-CBG) tetap Fase 3 (paper
   Bagian 6). Kode INA-CBG di seed (`J-4-17-I`) adalah contoh, bukan
   hasil grouping sungguhan.
+- **BPJS `health()` = Offline saat dikonfigurasi.** Tidak ada endpoint
+  probe tanpa efek samping yang dijamin ada di kelima layanan BPJS;
+  status live dinilai dari hasil kirim outbox, bukan dari pill ini.
+  (SATUSEHAT `health()` asli — fetch token.)
+- **Kode kelas bed Aplicares dipetakan ke nama UI** ("1" → "Kelas 1")
+  supaya refresh tidak membuat baris ganda di samping seed.
 
 ## Yang SENGAJA belum dibangun (Fase 3–4)
 

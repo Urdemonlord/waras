@@ -858,6 +858,19 @@ pub async fn list_beds(
     Ok(Json(state.db.list_beds().await?))
 }
 
+/// Kode kelas Aplicares (`ref/kelas`) ke nama yang dipakai UI WARAS.
+/// BPJS memakai kode "1"/"2"/"3"/"VIP"/"VVIP" dengan nama "Kelas 1" dst.;
+/// tanpa pemetaan ini, refresh akan membuat baris ganda ("1" di samping
+/// "Kelas 1" dari seed). Kode yang tidak dikenal disimpan apa adanya.
+fn bed_class_display(kodekelas: &str) -> String {
+    match kodekelas.trim() {
+        "1" => "Kelas 1".to_string(),
+        "2" => "Kelas 2".to_string(),
+        "3" => "Kelas 3".to_string(),
+        other => other.to_string(),
+    }
+}
+
 pub async fn refresh_beds(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
@@ -873,7 +886,8 @@ pub async fn refresh_beds(
         Err(e) => return Ok(bridge_error(&e)),
     };
     // Adapter mengembalikan daftar bed sebagai JSON di `note`
-    // (stub: {"list": [{"kodeKelas", "total", "tersedia"}]}).
+    // (bentuk Aplicares asli: {"list": [{"kodekelas", "koderuang",
+    // "namaruang", "kapasitas", "tersedia", ...}]}).
     let note = outcome.note.ok_or_else(|| {
         ApiError::internal("respons Aplicares tidak berisi daftar bed")
     })?;
@@ -889,19 +903,23 @@ pub async fn refresh_beds(
     let mut beds = Vec::with_capacity(list.len());
     for item in &list {
         let class = item
-            .get("kodeKelas")
+            .get("kodekelas")
+            .or_else(|| item.get("kodeKelas"))
             .or_else(|| item.get("class"))
             .or_else(|| item.get("kode_kelas"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let total = item.get("total").and_then(|v| v.as_i64());
+        let total = item
+            .get("kapasitas")
+            .or_else(|| item.get("total"))
+            .and_then(|v| v.as_i64());
         let available = item
             .get("tersedia")
             .or_else(|| item.get("available"))
             .and_then(|v| v.as_i64());
         if let (Some(class), Some(total), Some(available)) = (class, total, available) {
             beds.push(BedAvailability {
-                class,
+                class: bed_class_display(&class),
                 total,
                 available,
                 updated_at: now_clinic(),
