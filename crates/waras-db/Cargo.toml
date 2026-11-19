@@ -1,0 +1,19 @@
+[package]
+name = "waras-db"
+version = "0.1.0"
+edition = "2021"
+description = "WARAS persistence: SQLx SQLite, migrations, repositories, seed data"
+license = "Apache-2.0"
+
+[dependencies]
+waras-core.workspace = true
+tokio.workspace = true
+sqlx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+argon2.workspace = true
+sha2.workspace = true
+rand.workspace = true
+thiserror.workspace = true

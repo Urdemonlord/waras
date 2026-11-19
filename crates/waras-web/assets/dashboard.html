@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard — WARAS</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body data-page="dashboard">
+<div class="shell">
+<aside class="sidebar">
+  <div class="brand">
+    <img src="/waras-tile-sharp.png" alt="Logo WARAS">
+    <div><div class="name">WARAS</div><div class="sub">SIMRS open source · v1.0</div></div>
+  </div>
+  <nav class="nav">
+<div class="nav-group">PELAYANAN</div>
+<a class="nav-item" data-nav="dashboard" href="/dashboard"><img class="ic" src="/icons/house-CBD5E1.png" alt="">Dashboard</a>
+<a class="nav-item" data-nav="registrasi" href="/registrasi"><img class="ic" src="/icons/pencil-CBD5E1.png" alt="">Registrasi & Antrean</a>
+<a class="nav-item" data-nav="rme" href="/rme?pasien=RM-000812"><img class="ic" src="/icons/stethoscope-CBD5E1.png" alt="">Rekam Medis (RME)</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/arrow-right-CBD5E1.png" alt="">Rawat Jalan<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/zap-CBD5E1.png" alt="">IGD<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/heart-pulse-CBD5E1.png" alt="">Rawat Inap<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/scissors-CBD5E1.png" alt="">Kamar Operasi & Bersalin<span class="tag-segera">segera</span></a>
+<a class="nav-item" data-nav="farmasi" href="/farmasi"><img class="ic" src="/icons/cross-CBD5E1.png" alt="">Farmasi</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/flask-conical-CBD5E1.png" alt="">Laboratorium<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/crosshair-CBD5E1.png" alt="">Radiologi<span class="tag-segera">segera</span></a>
+<div class="nav-group">KEUANGAN</div>
+<a class="nav-item" data-nav="billing" href="/billing"><img class="ic" src="/icons/scale-CBD5E1.png" alt="">Billing & Kasir</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/layout-grid-CBD5E1.png" alt="">Casemix (INA-CBG)<span class="tag-segera">segera</span></a>
+<div class="nav-group">OPERASIONAL</div>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/copy-CBD5E1.png" alt="">Inventori<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/users-CBD5E1.png" alt="">Kepegawaian<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/file-text-CBD5E1.png" alt="">Laporan & SIRS<span class="tag-segera">segera</span></a>
+<div class="nav-group">INTEGRASI</div>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/rotate-cw-CBD5E1.png" alt="">SATUSEHAT (FHIR)<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/flag-CBD5E1.png" alt="">BPJS · VClaim / PCare<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/clock-CBD5E1.png" alt="">Antrean Online & Aplicares<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/command-CBD5E1.png" alt="">API Publik<span class="tag-segera">segera</span></a>
+<div class="nav-group">SISTEM</div>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/settings-CBD5E1.png" alt="">Pengaturan & Audit<span class="tag-segera">segera</span></a>
+  </nav>
+  <div class="sidebar-foot">RSUD Waras · Semarang<div class="mode">v1.0 · Mode Klinik · SQLite</div></div>
+</aside>
+<main class="main">
+<header class="topbar">
+  <div class="search">
+    <img class="ic-search" src="/icons/search-667085.png" alt="">
+    <input id="top-search" type="search" placeholder="Cari pasien, NIK, RM…" autocomplete="off">
+    <kbd>⌘K</kbd>
+    <div class="search-results" id="search-results"></div>
+  </div>
+  <div class="spacer"></div>
+  <button class="icon-btn" title="Profil" aria-label="Profil"><img src="/icons/circle-user-round-374151.png" alt=""></button>
+  <button class="icon-btn" id="bell-btn" title="Notifikasi" aria-label="Notifikasi"><img src="/icons/mail-374151.png" alt=""><span class="red-dot" id="bell-dot"></span></button>
+  <div class="me">
+    <span class="avatar" id="me-avatar">AH</span>
+    <span><span class="me-name" id="me-name">dr. Ahmad Hidayat</span><br><span class="me-role" id="me-role">Dokter Umum</span></span>
+  </div>
+</header>
+<div class="content">
+<div class="page-head"><h1>Dashboard</h1><div class="sub">Dokter Umum · Kamis, 19 November 2026 · Shift pagi 07.00–14.00</div></div>
+
+<div style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px">
+  <div class="pills-row">
+    <span class="pill green"><i class="dot"></i>Online</span>
+    <span class="pill green"><i class="dot"></i>Aktif</span>
+    <span class="pill amber"><i class="dot"></i>Peringatan</span>
+    <span class="pill red"><i class="dot"></i>Kritis</span>
+    <span class="pill neutral"><i class="dot"></i>Offline</span>
+  </div>
+  <div class="rag-strip">Prioritas klinis: <span class="r">2 merah</span> · <span class="y">5 kuning</span> · <span class="g">9 hijau</span> &nbsp;<a href="#" data-soon>Lihat daftar kasus ›</a></div>
+</div>
+<h2 style="font-size:18px">Selamat pagi, dr. Ahmad Hidayat</h2>
+<p class="muted" id="greet-sub" style="margin:2px 0 16px">Ringkasan hari ini — memuat…</p>
+<div class="grid kpi">
+  <div class="kpi"><div class="kpi-label">Pasien hari ini <img class="ic" src="/icons/users-0B7285.png" alt=""></div><div class="kpi-value accent" id="kpi-patients">—</div><div class="kpi-sub">+12% dari kemarin<br>Kunjungan terdaftar hari ini, semua poli</div></div>
+  <div class="kpi"><div class="kpi-label">Antrean aktif <img class="ic" src="/icons/clock-0B7285.png" alt=""></div><div class="kpi-value" id="kpi-queue">—</div><div class="kpi-sub"><span id="kpi-queue-sub">Menunggu …</span><br>Sudah check-in &amp; belum selesai</div></div>
+  <div class="kpi"><div class="kpi-label">Lab menunggu <img class="ic" src="/icons/flask-conical-0B7285.png" alt=""></div><div class="kpi-value" id="kpi-lab">—</div><div class="kpi-sub"><span id="kpi-lab-sub">—</span><br>Hasil lab belum dibaca dokter</div></div>
+  <div class="kpi"><div class="kpi-label">Kontrol ulang <img class="ic" src="/icons/rotate-cw-0B7285.png" alt=""></div><div class="kpi-value" id="kpi-followups">—</div><div class="kpi-sub">Jadwal 7 hari<br>Janji kontrol 7 hari ke depan</div></div>
+  <div class="kpi"><div class="kpi-label">Gawat darurat <img class="ic" src="/icons/zap-0B7285.png" alt=""></div><div class="kpi-value danger" id="kpi-emergency">—</div><div class="kpi-sub">IGD · triase merah<br>Pasien IGD triase merah saat ini</div></div>
+</div>
+<div class="grid c2w" style="margin-top:16px">
+  <div class="card">
+    <div class="card-head"><img class="ic" src="/icons/trending-up-0B7285.png" alt=""><h2>Kunjungan 7 hari terakhir</h2><a class="link" href="#" data-soon>Lihat laporan</a></div>
+    <div class="bars" id="visit-bars"></div>
+    <p class="muted small" id="visit-note" style="margin:10px 0 0">Memuat grafik…</p>
+  </div>
+  <div>
+    <div class="card">
+      <div class="card-head"><img class="ic" src="/icons/arrow-right-0B7285.png" alt=""><h2>Tautan cepat — Dokter Umum</h2></div>
+      <div class="quick-grid">
+        <a class="quick" href="/rme?pasien=RM-000812"><img src="/icons/stethoscope-0B7285.png" alt="">RME</a>
+        <a class="quick" href="/farmasi"><img src="/icons/cross-0B7285.png" alt="">Resep</a>
+        <a class="quick" href="#" data-soon><img src="/icons/flask-conical-0B7285.png" alt="">Lab</a>
+        <a class="quick" href="#" data-soon><img src="/icons/crosshair-0B7285.png" alt="">Radiologi</a>
+        <a class="quick" href="#" data-soon><img src="/icons/flag-0B7285.png" alt="">SEP</a>
+        <a class="quick" href="#" data-soon><img src="/icons/sparkles-0B7285.png" alt="">Asisten AI</a>
+      </div>
+      <p class="muted small" style="margin:12px 0 0">Tautan menyesuaikan peran:<br>Dokter Umum — 6 modul aktif.</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><img class="ic" src="/icons/layout-grid-0B7285.png" alt=""><h2>Status antrean</h2><a class="link" href="/registrasi">Lihat antrean</a></div>
+      <div class="donut-wrap">
+        <div class="donut" id="queue-donut"><div class="donut-hole"><span class="total" id="donut-total">—</span><span class="lbl">total</span></div></div>
+        <ul class="legend" id="donut-legend"></ul>
+      </div>
+      <p class="muted small" id="donut-note" style="margin:12px 0 0">Memuat…</p>
+    </div>
+  </div>
+</div>
+<div class="grid c2" style="margin-top:16px">
+  <div class="card">
+    <div class="card-head"><img class="ic" src="/icons/clock-0B7285.png" alt=""><h2>Jadwal &amp; janji hari ini</h2><a class="link" href="#" data-soon>Lihat kalender</a></div>
+    <table class="tbl"><thead><tr><th>Janji</th><th>Pasien</th><th>Poli</th><th>Konsultasi</th><th>Status</th></tr></thead>
+    <tbody id="schedule-body"><tr><td colspan="5" class="empty-note">Memuat jadwal…</td></tr></tbody></table>
+    <p class="muted small" style="margin:10px 0 0">Janji dan jadwal digabung: satu pasien, satu baris.<br>Jam janji = waktu booking · Jam konsultasi = slot pemeriksaan. Diambil dari antrean hari ini (GET /api/queue).</p>
+  </div>
+  <div>
+    <div class="card">
+      <div class="card-head"><img class="ic" src="/icons/clock-0B7285.png" alt=""><h2>November 2026</h2><a class="link" href="#" data-soon>Kalender</a></div>
+      <table class="cal"><tr><th>Min</th><th>Sen</th><th>Sel</th><th>Rab</th><th>Kam</th><th>Jum</th><th>Sab</th></tr><tr><td></td><td></td><td></td><td></td><td></td><td></td><td>1</td></tr><tr><td>2</td><td>3</td><td>4</td><td>5</td><td>6</td><td>7</td><td>8</td></tr><tr><td>9</td><td>10</td><td>11</td><td>12</td><td>13</td><td>14</td><td>15</td></tr><tr><td>16</td><td>17</td><td>18</td><td class="today">19</td><td>20</td><td>21</td><td>22</td></tr><tr><td>23</td><td>24</td><td>25</td><td>26</td><td>27</td><td>28</td><td>29</td></tr><tr><td>30</td><td></td><td></td><td></td><td></td><td></td><td></td></tr></table>
+      <p class="muted small" id="cal-note" style="margin:10px 0 0">19 Nov: memuat…</p>
+    </div>
+    <div class="card">
+      <div class="card-head"><img class="ic" src="/icons/settings-0B7285.png" alt=""><h2>Filter dashboard</h2></div>
+      <p style="margin:0">Periode · <strong>Hari ini</strong><br>Unit · <strong>Semua Unit</strong></p>
+    </div>
+    <div class="card">
+      <div class="card-head"><img class="ic" src="/icons/triangle-alert-B45309.png" alt=""><h2>Notifikasi</h2><a class="link" href="#" data-soon>Lihat semua</a></div>
+      <div id="notif-list"><p class="empty-note">Memuat notifikasi…</p></div>
+      <div class="ai-card">
+        <strong>Asisten Klinis AI — BETA</strong>
+        <p class="small" style="margin:6px 0 10px">Ringkasan pasien dari SOAP, lab, dan obat. Bukan pengganti penilaian dokter.</p>
+        <button class="btn" id="ai-summary-btn"><img class="ic" src="/icons/sparkles-0B7285.png" alt="">Buat ringkasan</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+</main>
+</div>
+<div id="toast"></div>
+<script src="/js/app.js"></script>
+<script src="/js/dashboard.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+[package]
+name = "waras-web"
+version = "0.1.0"
+edition = "2021"
+description = "WARAS web UI: static assets embedded in the binary (rust-embed)"
+license = "Apache-2.0"
+
+[dependencies]
+rust-embed.workspace = true

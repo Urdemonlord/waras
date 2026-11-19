@@ -1,0 +1,91 @@
+//! WARAS server binary: one binary, SQLite clinic mode.
+//!
+//! Startup: open the SQLite file (default `./waras.db`), run embedded
+//! migrations, seed Fase 1 demo data when the database is empty, then serve
+//! the API + UI on one port.
+//!
+//! Configuration (environment):
+//! - `WARAS_HOST` (default `127.0.0.1`)
+//! - `WARAS_PORT` (default `3000`)
+//! - `WARAS_DB` (default `waras.db`, relative to the working directory)
+//! - `WARAS_TODAY` (default `2026-11-19`, the clinic date used for "hari ini"
+//!   in seed data and dashboard KPIs)
+//! - `RUST_LOG` (default `waras=info,tower_http=info`)
+
+use std::{net::SocketAddr, sync::Arc};
+
+use waras_api::{router, AppState};
+use waras_db::Db;
+
+#[tokio::main]
+async fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "waras=info".to_string()),
+        )
+        .init();
+
+    let host = std::env::var("WARAS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port: u16 = std::env::var("WARAS_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(3000);
+    let db_path = std::env::var("WARAS_DB").unwrap_or_else(|_| "waras.db".to_string());
+
+    let db = Db::connect(&db_path)
+        .await
+        .expect("gagal membuka basis data SQLite");
+    db.migrate().await.expect("gagal menjalankan migrasi");
+    db.seed_if_empty()
+        .await
+        .expect("gagal memuat data seed Fase 1");
+
+    let today = waras_db::clinic_today();
+    let addr: SocketAddr = format!("{host}:{port}")
+        .parse()
+        .expect("WARAS_HOST/WARAS_PORT tidak valid");
+
+    tracing::info!(
+        "WARAS v{} siap — mode klinik (SQLite), tanggal klinik {}, basis data {}, dengarkan di http://{}",
+        env!("CARGO_PKG_VERSION"),
+        today,
+        db_path,
+        addr
+    );
+    tracing::info!("Login seed: NIP 198505122010011001 (dr. Ahmad Hidayat) / kata sandi waras123");
+
+    let app = router(AppState { db: Arc::new(db) });
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .expect("gagal bind ke alamat");
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("server berhenti dengan kesalahan");
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("gagal memasang handler Ctrl-C");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("gagal memasang handler SIGTERM")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!("Mematikan WARAS…");
+}

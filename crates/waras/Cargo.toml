@@ -1,0 +1,23 @@
+[package]
+name = "waras"
+version = "0.1.0"
+edition = "2021"
+description = "WARAS server binary: one binary, SQLite clinic mode, serves API + UI"
+license = "Apache-2.0"
+
+[[bin]]
+name = "waras"
+path = "src/main.rs"
+
+[dependencies]
+waras-core.workspace = true
+waras-db.workspace = true
+waras-api.workspace = true
+waras-web.workspace = true
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

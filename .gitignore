@@ -1,0 +1,5 @@
+target/
+waras.db
+waras.db-shm
+waras.db-wal
+.DS_Store

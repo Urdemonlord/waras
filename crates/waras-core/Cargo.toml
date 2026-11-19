@@ -1,0 +1,12 @@
+[package]
+name = "waras-core"
+version = "0.1.0"
+edition = "2021"
+description = "WARAS domain types, medication-safety rules, RBAC and FHIR helpers (pure Rust, no I/O)"
+license = "Apache-2.0"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+thiserror.workspace = true

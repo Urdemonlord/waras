@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Billing & Kasir — WARAS</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body data-page="billing">
+<div class="shell">
+<aside class="sidebar">
+  <div class="brand">
+    <img src="/waras-tile-sharp.png" alt="Logo WARAS">
+    <div><div class="name">WARAS</div><div class="sub">SIMRS open source · v1.0</div></div>
+  </div>
+  <nav class="nav">
+<div class="nav-group">PELAYANAN</div>
+<a class="nav-item" data-nav="dashboard" href="/dashboard"><img class="ic" src="/icons/house-CBD5E1.png" alt="">Dashboard</a>
+<a class="nav-item" data-nav="registrasi" href="/registrasi"><img class="ic" src="/icons/pencil-CBD5E1.png" alt="">Registrasi & Antrean</a>
+<a class="nav-item" data-nav="rme" href="/rme?pasien=RM-000812"><img class="ic" src="/icons/stethoscope-CBD5E1.png" alt="">Rekam Medis (RME)</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/arrow-right-CBD5E1.png" alt="">Rawat Jalan<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/zap-CBD5E1.png" alt="">IGD<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/heart-pulse-CBD5E1.png" alt="">Rawat Inap<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/scissors-CBD5E1.png" alt="">Kamar Operasi & Bersalin<span class="tag-segera">segera</span></a>
+<a class="nav-item" data-nav="farmasi" href="/farmasi"><img class="ic" src="/icons/cross-CBD5E1.png" alt="">Farmasi</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/flask-conical-CBD5E1.png" alt="">Laboratorium<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/crosshair-CBD5E1.png" alt="">Radiologi<span class="tag-segera">segera</span></a>
+<div class="nav-group">KEUANGAN</div>
+<a class="nav-item" data-nav="billing" href="/billing"><img class="ic" src="/icons/scale-CBD5E1.png" alt="">Billing & Kasir</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/layout-grid-CBD5E1.png" alt="">Casemix (INA-CBG)<span class="tag-segera">segera</span></a>
+<div class="nav-group">OPERASIONAL</div>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/copy-CBD5E1.png" alt="">Inventori<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/users-CBD5E1.png" alt="">Kepegawaian<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/file-text-CBD5E1.png" alt="">Laporan & SIRS<span class="tag-segera">segera</span></a>
+<div class="nav-group">INTEGRASI</div>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/rotate-cw-CBD5E1.png" alt="">SATUSEHAT (FHIR)<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/flag-CBD5E1.png" alt="">BPJS · VClaim / PCare<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/clock-CBD5E1.png" alt="">Antrean Online & Aplicares<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/command-CBD5E1.png" alt="">API Publik<span class="tag-segera">segera</span></a>
+<div class="nav-group">SISTEM</div>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/settings-CBD5E1.png" alt="">Pengaturan & Audit<span class="tag-segera">segera</span></a>
+  </nav>
+  <div class="sidebar-foot">RSUD Waras · Semarang<div class="mode">v1.0 · Mode Klinik · SQLite</div></div>
+</aside>
+<main class="main">
+<header class="topbar">
+  <div class="search">
+    <img class="ic-search" src="/icons/search-667085.png" alt="">
+    <input id="top-search" type="search" placeholder="Cari pasien, NIK, RM…" autocomplete="off">
+    <kbd>⌘K</kbd>
+    <div class="search-results" id="search-results"></div>
+  </div>
+  <div class="spacer"></div>
+  <button class="icon-btn" title="Profil" aria-label="Profil"><img src="/icons/circle-user-round-374151.png" alt=""></button>
+  <button class="icon-btn" id="bell-btn" title="Notifikasi" aria-label="Notifikasi"><img src="/icons/mail-374151.png" alt=""><span class="red-dot" id="bell-dot"></span></button>
+  <div class="me">
+    <span class="avatar" id="me-avatar">AH</span>
+    <span><span class="me-name" id="me-name">dr. Ahmad Hidayat</span><br><span class="me-role" id="me-role">Dokter Umum</span></span>
+  </div>
+</header>
+<div class="content">
+<div class="page-head"><h1>Billing &amp; Kasir</h1><div class="sub">Tagihan umum &amp; penjamin · Pembayaran bertahap · Deposit</div></div>
+
+<div class="grid" style="grid-template-columns:repeat(4,1fr)">
+  <div class="kpi"><div class="kpi-label">Pendapatan hari ini <img class="ic" src="/icons/scale-0B7285.png" alt=""></div><div class="kpi-value accent" id="sum-revenue">—</div><div class="kpi-sub" id="sum-revenue-sub">… transaksi</div></div>
+  <!-- Agregat statis berlabel: klaim BPJS November 2026; API Fase 1 belum mengekspos agregat piutang BPJS (CONTRACT §4). -->
+  <div class="kpi"><div class="kpi-label">Piutang BPJS <img class="ic" src="/icons/scale-0B7285.png" alt=""></div><div class="kpi-value" id="sum-bpjs">Rp 212 jt</div><div class="kpi-sub">Periode November 2026</div></div>
+  <!-- Agregat statis berlabel: deposit rawat inap; API Fase 1 belum mengekspos agregat deposit (CONTRACT §4). -->
+  <div class="kpi"><div class="kpi-label">Deposit rawat inap <img class="ic" src="/icons/layout-grid-0B7285.png" alt=""></div><div class="kpi-value" id="sum-deposit">Rp 46 jt</div><div class="kpi-sub">18 pasien aktif</div></div>
+  <div class="kpi"><div class="kpi-label">Belum lunas <img class="ic" src="/icons/triangle-alert-B45309.png" alt=""></div><div class="kpi-value" id="sum-unpaid" style="color:#B45309">—</div><div class="kpi-sub"><span class="warn" id="sum-unpaid-sub">… tagihan</span></div></div>
+</div>
+<div class="card">
+  <div class="card-head"><img class="ic" src="/icons/scale-0B7285.png" alt=""><h2>Tagihan hari ini</h2><a class="link" href="#" data-soon>Tagihan baru</a></div>
+  <table class="tbl"><thead><tr><th>No. Tagihan</th><th>Pasien</th><th>Penjamin</th><th>Layanan</th><th class="num">Jumlah</th><th>Status</th></tr></thead>
+  <tbody id="inv-body"><tr><td colspan="6" class="empty-note">Memuat tagihan…</td></tr></tbody></table>
+  <div class="pagination"><button class="pg">‹</button><button class="pg active">1</button><button class="pg">2</button><button class="pg">3</button><button class="pg">…</button><button class="pg">›</button><span class="muted small" style="margin-left:8px">10 / halaman</span></div>
+  <div class="action-row">
+    <button class="btn primary" id="btn-simpan">✓ Simpan</button>
+    <button class="btn" id="btn-batal">✕ Batal</button>
+    <button class="btn" id="btn-cetak"><img class="ic" src="/icons/printer-374151.png" alt="">Cetak</button>
+    <button class="btn" id="btn-unduh"><img class="ic" src="/icons/download-1A2027.png" alt="">Unduh</button>
+    <button class="btn" id="btn-tutup">✕ Tutup</button>
+  </div>
+</div>
+<div class="card" id="pay-panel">
+  <div class="card-head"><img class="ic" src="/icons/scale-0B7285.png" alt=""><h2>Pembayaran — kasir</h2><a class="link" href="#" data-soon>Cetak struk</a></div>
+  <p id="pay-label" style="margin:0 0 4px">Memuat tagihan…</p>
+  <form id="pay-form">
+    <div class="field" style="max-width:480px"><label for="pay-invoice">Tagihan belum lunas</label><select id="pay-invoice"></select></div>
+    <div class="method-row" id="pay-methods">
+      <button type="button" class="method active" data-method="tunai">Tunai</button>
+      <button type="button" class="method" data-method="qris">QRIS</button>
+      <button type="button" class="method" data-method="transfer">Transfer</button>
+      <button type="button" class="method" data-method="deposit">Deposit pasien</button>
+    </div>
+    <div class="field" style="max-width:240px"><label for="pay-amount">Jumlah dibayar (Rp)</label><input id="pay-amount" type="number" min="0" step="1000"></div>
+    <div class="action-row" style="margin-top:0">
+      <button class="btn primary" type="submit" id="pay-btn">Terima Pembayaran</button>
+      <button class="btn" type="button" id="btn-kwitansi"><img class="ic" src="/icons/printer-374151.png" alt="">Cetak Kwitansi</button>
+    </div>
+  </form>
+</div>
+
+</div>
+</main>
+</div>
+<div id="toast"></div>
+<script src="/js/app.js"></script>
+<script src="/js/billing.js"></script>
+</body>
+</html>
