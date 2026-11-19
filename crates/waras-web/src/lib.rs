@@ -4,7 +4,9 @@
 //! The API crate serves these files: `/` -> `index.html` (Login),
 //! `/dashboard` -> `dashboard.html`, `/registrasi` -> `registrasi.html`,
 //! `/rme` -> `rme.html`, `/farmasi` -> `farmasi.html`,
-//! `/billing` -> `billing.html`, everything else under `assets/` as-is
+//! `/billing` -> `billing.html`, `/satusehat` -> `satusehat.html`,
+//! `/bpjs` -> `bpjs.html`, `/antrean-online` -> `antrean.html`,
+//! everything else under `assets/` as-is
 //! (`/css/app.css`, `/js/*.js`, `/icons/*.png`, `/waras-tile-sharp.png`).
 //!
 //! All clinical data on the pages is loaded from the API at runtime
@@ -58,6 +60,9 @@ mod tests {
             "rme.html",
             "farmasi.html",
             "billing.html",
+            "satusehat.html",
+            "bpjs.html",
+            "antrean.html",
         ] {
             assert!(exists(page), "missing embedded page: {page}");
         }
@@ -74,6 +79,9 @@ mod tests {
             "js/rme.js",
             "js/farmasi.js",
             "js/billing.js",
+            "js/satusehat.js",
+            "js/bpjs.js",
+            "js/antrean.js",
             "waras-tile-sharp.png",
         ] {
             assert!(exists(asset), "missing embedded asset: {asset}");

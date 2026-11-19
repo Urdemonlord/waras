@@ -1,7 +1,7 @@
 //! Penyajian UI statis dari `waras-web` (rust-embed) + fallback router.
 //!
 //! Halaman: `/` -> Login, `/dashboard`, `/registrasi`, `/rme`, `/farmasi`,
-//! `/billing`. Aset dilayani apa adanya dari embed (`/css/*`, `/js/*`,
+//! `/billing`, `/satusehat`, `/bpjs`, `/antrean-online` (Fase 2, FASE2.md §6).
 //! `/icons/*`, `/assets/*`, `/waras-tile-sharp.png`) dengan MIME dari
 //! `waras_web::mime_for`. Fallback: path `/api/*` yang tidak dikenal ->
 //! JSON 404; path lain -> redirect ke `/` (deep link yang salah mendarat
@@ -51,6 +51,18 @@ pub async fn serve_farmasi() -> Response {
 
 pub async fn serve_billing() -> Response {
     serve_asset("billing.html")
+}
+
+pub async fn serve_satusehat() -> Response {
+    serve_asset("satusehat.html")
+}
+
+pub async fn serve_bpjs() -> Response {
+    serve_asset("bpjs.html")
+}
+
+pub async fn serve_antrean() -> Response {
+    serve_asset("antrean.html")
 }
 
 pub async fn serve_tile() -> Response {
