@@ -16,6 +16,9 @@ tracing.workspace = true
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 hmac = "0.12"
 sha2.workspace = true
+aes = "0.9"
+cbc = { version = "0.2", features = ["alloc"] }
+cipher = "0.5"
 base64 = "0.22"
 async-trait = "0.1"
 
