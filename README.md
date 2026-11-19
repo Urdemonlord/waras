@@ -110,6 +110,36 @@ cargo test --offline
 resep diblokir 422 / diizinkan, bayar tagihan, bundle FHIR),
 `waras-web` 3 (aset tertanam).
 
+## Jembatan nasional (Fase 2, adapter saja)
+
+`waras-bridge` mengimplementasikan pengiriman SATUSEHAT (OAuth2 client
+credentials + POST FHIR, token di-cache, refresh sekali setelah 401,
+validasi profil sebelum kirim) dan BPJS (VClaim, PCare, Antrean Online,
+Aplicares, E-Klaim; header tanda tangan HMAC-SHA256, envelope
+`metaData`, dekripsi respons AES-256-CBC bila `response` terenkripsi).
+Semua pengujian memakai stub server lokal (axum, port ephemeral);
+tidak ada panggilan live.
+
+**Pola bridging, bukan fakta terverifikasi:** path endpoint BPJS
+(mis. VClaim `SEP/2.0/insert`, `Peserta/nik/{nik}/tglSEP/{date}`;
+PCare `kunjungan`; Antrean `antrean/add`; Aplicares `bed/get`; E-Klaim
+`klaim/submit`) dan skema dekripsi AES-256-CBC (kunci = SHA-256 mentah
+dari `cons_id + secret_key + timestamp`, IV = 16 byte pertama kunci)
+adalah pola bridging yang umum. Semuanya harus diverifikasi ulang ke
+dokumen bridging resmi BPJS saat kredensial live tersedia, sebelum
+diaktifkan di produksi. Jangan klaim path ini sudah terverifikasi.
+
+**Dekripsi diimplementasikan** (`aes 0.9` + `cbc 0.2`, keduanya resolve
+offline dari cache; kontrak menyebut `aes 0.8`, yang tidak ada di
+cache). Round-trip enkripsi/dekripsi diuji, termasuk end-to-end lewat
+stub yang mengenkripsi respons dengan timestamp dari header request.
+
+**Idempotensi dijamin outbox, bukan adapter:** adapter mengirim ulang
+job yang sama sebagai HTTP baru; worker/outbox (agen A/C) yang
+mencegah duplikat lewat `idempotency_key`.
+
+Contoh nilai kredensial (PALSU) ada di `docs/FASE2.md` §7.
+
 ## Yang SENGAJA belum dibangun (Fase 2–4)
 
 Jembatan nasional (SATUSEHAT/FHIR sinkronisasi, BPJS VClaim/PCare,
