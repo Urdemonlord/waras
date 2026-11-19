@@ -23,6 +23,13 @@ pub enum Action {
     ReceivePayment,
     ViewAudit,
     ManageUsers,
+    // -- Fase 2 (FASE2.md §4.3) -------------------------------------------
+    ViewBridges,
+    ManageOutbox,
+    CreateSep,
+    CreateReferral,
+    CreateClaim,
+    SyncBridges,
 }
 
 impl Action {
@@ -45,6 +52,12 @@ impl Action {
             Action::ReceivePayment => "terima pembayaran",
             Action::ViewAudit => "lihat audit trail",
             Action::ManageUsers => "kelola pengguna",
+            Action::ViewBridges => "lihat status jembatan",
+            Action::ManageOutbox => "kelola outbox",
+            Action::CreateSep => "buat/batalkan SEP",
+            Action::CreateReferral => "buat rujukan",
+            Action::CreateClaim => "buat klaim",
+            Action::SyncBridges => "sinkronisasi jembatan",
         }
     }
 }
@@ -69,6 +82,9 @@ pub fn can(role: Role, action: Action) -> bool {
                 | ConfirmPrescription
                 | ViewDrugs
                 | ViewAudit
+                | ViewBridges
+                | CreateSep
+                | CreateReferral
         ),
         Role::Perawat => matches!(
             action,
@@ -79,14 +95,16 @@ pub fn can(role: Role, action: Action) -> bool {
                 | CallQueue
                 | RecordVitals
                 | ViewDrugs
+                | ViewBridges
+                | CreateSep
         ),
         Role::Apoteker => matches!(
             action,
-            ViewDashboard | ViewPatient | Dispense | ViewDrugs
+            ViewDashboard | ViewPatient | Dispense | ViewDrugs | ViewBridges
         ),
         Role::Kasir => matches!(
             action,
-            ViewDashboard | ViewPatient | CreateInvoice | ReceivePayment
+            ViewDashboard | ViewPatient | CreateInvoice | ReceivePayment | ViewBridges | CreateClaim
         ),
     }
 }
@@ -126,8 +144,37 @@ mod tests {
             Action::Dispense,
             Action::ReceivePayment,
             Action::ManageUsers,
+            Action::ViewBridges,
+            Action::ManageOutbox,
+            Action::CreateSep,
+            Action::CreateReferral,
+            Action::CreateClaim,
+            Action::SyncBridges,
         ] {
             assert!(can(Role::Admin, action));
         }
+    }
+
+    #[test]
+    fn fase2_matrix() {
+        // FASE2.md §4.3.
+        assert!(can(Role::DokterUmum, Action::ViewBridges));
+        assert!(can(Role::DokterUmum, Action::CreateSep));
+        assert!(can(Role::DokterUmum, Action::CreateReferral));
+        assert!(!can(Role::DokterUmum, Action::ManageOutbox));
+        assert!(!can(Role::DokterUmum, Action::CreateClaim));
+        assert!(!can(Role::DokterUmum, Action::SyncBridges));
+        assert!(can(Role::Perawat, Action::ViewBridges));
+        assert!(can(Role::Perawat, Action::CreateSep));
+        assert!(!can(Role::Perawat, Action::CreateReferral));
+        assert!(!can(Role::Perawat, Action::ManageOutbox));
+        assert!(can(Role::Apoteker, Action::ViewBridges));
+        assert!(!can(Role::Apoteker, Action::CreateSep));
+        assert!(!can(Role::Apoteker, Action::CreateClaim));
+        assert!(can(Role::Kasir, Action::ViewBridges));
+        assert!(can(Role::Kasir, Action::CreateClaim));
+        assert!(!can(Role::Kasir, Action::CreateSep));
+        assert!(!can(Role::Kasir, Action::ManageOutbox));
+        assert!(!can(Role::Kasir, Action::SyncBridges));
     }
 }

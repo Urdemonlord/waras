@@ -17,9 +17,10 @@ use chrono::NaiveDate;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use waras_core::{
+    bridge::OutboxDestination,
     fhir,
     rbac::Action,
-    types::{LoginRequest, NewPrescription},
+    types::{EncounterStatus, LoginRequest, NewPrescription},
     WarasError,
 };
 use waras_db::{clinic_today, Db, NewPatient, PrescriptionFilter};
@@ -28,6 +29,7 @@ use crate::{
     auth::{require, AuthUser, JsonBody},
     error::ApiError,
     parse::*,
+    worker::{new_outbox_job, try_enqueue},
     AppState,
 };
 
@@ -179,6 +181,19 @@ pub async fn create_patient(
         "patient",
         &patient.id,
         json!({"name": patient.name, "nik": patient.nik}),
+    )
+    .await;
+    // Fase 2 (§4.2): enqueue Patient ke SATUSEHAT (best-effort).
+    try_enqueue(
+        &state.db,
+        &new_outbox_job(
+            OutboxDestination::Satusehat,
+            "Patient",
+            &patient.id,
+            &format!("satusehat:Patient:{}:created", patient.id),
+            fhir::patient_resource(&patient),
+            state.bridge_config.outbox_max_attempts,
+        ),
     )
     .await;
     Ok((StatusCode::CREATED, Json(patient)))
@@ -563,6 +578,19 @@ pub async fn add_vital(
         json!({"encounter_id": id, "code": body.code, "value": body.value}),
     )
     .await;
+    // Fase 2 (§4.2): enqueue Observation ke SATUSEHAT (best-effort).
+    try_enqueue(
+        &state.db,
+        &new_outbox_job(
+            OutboxDestination::Satusehat,
+            "Observation",
+            &obs.id,
+            &format!("satusehat:Observation:{}:created", obs.id),
+            fhir::observation_resource(&obs),
+            state.bridge_config.outbox_max_attempts,
+        ),
+    )
+    .await;
     Ok((StatusCode::CREATED, Json(obs)))
 }
 
@@ -617,7 +645,96 @@ pub async fn add_condition(
         json!({"encounter_id": id, "code": body.code, "display": body.display}),
     )
     .await;
+    // Fase 2 (§4.2): enqueue Condition ke SATUSEHAT (best-effort).
+    try_enqueue(
+        &state.db,
+        &new_outbox_job(
+            OutboxDestination::Satusehat,
+            "Condition",
+            &condition.id,
+            &format!("satusehat:Condition:{}:created", condition.id),
+            fhir::condition_resource(&condition),
+            state.bridge_config.outbox_max_attempts,
+        ),
+    )
+    .await;
     Ok((StatusCode::CREATED, Json(condition)))
+}
+
+// ---------------------------------------------------------------------------
+// Tutup encounter (Fase 2, §5): status -> Selesai + enqueue SATUSEHAT.
+// ---------------------------------------------------------------------------
+
+pub async fn close_encounter(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+) -> ApiResult<Json<waras_core::types::Encounter>> {
+    // Dokter/Admin: sama dengan yang boleh membuat encounter.
+    require(&user, Action::CreateEncounter)?;
+    let encounter = state
+        .db
+        .get_encounter(&id)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("encounter {id} tidak ditemukan")))?;
+    if encounter.status != EncounterStatus::Selesai {
+        state
+            .db
+            .set_encounter_status(&id, EncounterStatus::Selesai)
+            .await?;
+    }
+    let encounter = state
+        .db
+        .get_encounter(&id)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("encounter {id} tidak ditemukan")))?;
+    audit(
+        &state.db,
+        &user.name,
+        "encounter.closed",
+        "encounter",
+        &encounter.id,
+        json!({"patient_id": encounter.patient_id, "poli": encounter.poli}),
+    )
+    .await;
+    // Fase 2 (§4.2): enqueue resource Encounter + satu AllergyIntolerance
+    // per alergi pasien. PENYIMPANGAN dari tabel §4.2 (dicatat): tabel
+    // menulis payload `encounter_bundle` untuk resource_type `Encounter`,
+    // tapi adapter SATUSEHAT agen B menolak payload Encounter tanpa
+    // `subject` di level atas (sebuah Bundle tidak punya `subject`) dan
+    // `mark_outbox_sent` agen A hanya menyinkronkan `satusehat_id` untuk
+    // resource_type `Encounter` (bukan `Bundle`). Kombinasi literal
+    // tabel selalu mati Validation dan tidak pernah menyimpan
+    // `satusehat_id`. Jadi yang di-enqueue adalah resource Encounter
+    // tunggal (`fhir::encounter_resource`); bundle lengkap tetap tersedia
+    // lewat GET /api/encounters/{id}/fhir.
+    try_enqueue(
+        &state.db,
+        &new_outbox_job(
+            OutboxDestination::Satusehat,
+            "Encounter",
+            &encounter.id,
+            &format!("satusehat:Encounter:{}:closed", encounter.id),
+            fhir::encounter_resource(&encounter),
+            state.bridge_config.outbox_max_attempts,
+        ),
+    )
+    .await;
+    for allergy in state.db.get_allergies(&encounter.patient_id).await? {
+        try_enqueue(
+            &state.db,
+            &new_outbox_job(
+                OutboxDestination::Satusehat,
+                "AllergyIntolerance",
+                &allergy.id,
+                &format!("satusehat:AllergyIntolerance:{}:closed", allergy.id),
+                fhir::allergy_intolerance_resource(&allergy),
+                state.bridge_config.outbox_max_attempts,
+            ),
+        )
+        .await;
+    }
+    Ok(Json(encounter))
 }
 
 // ---------------------------------------------------------------------------
@@ -662,6 +779,20 @@ pub async fn create_prescription(
     // `prescription.blocked`) dan mengembalikan Err(Blocked) -> 422.
     // Audit `prescription.created` juga sudah dicatat di sana.
     let rx = state.db.prescribe(&user.name, body).await?;
+    // Fase 2 (§4.2): hanya bila lolos safety (sampai sini = lolos),
+    // enqueue MedicationRequest ke SATUSEHAT (best-effort).
+    try_enqueue(
+        &state.db,
+        &new_outbox_job(
+            OutboxDestination::Satusehat,
+            "MedicationRequest",
+            &rx.id,
+            &format!("satusehat:MedicationRequest:{}:created", rx.id),
+            fhir::medication_request_resource(&rx),
+            state.bridge_config.outbox_max_attempts,
+        ),
+    )
+    .await;
     Ok((StatusCode::CREATED, Json(rx)))
 }
 

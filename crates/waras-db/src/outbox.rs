@@ -405,6 +405,47 @@ impl Db {
                 .map_err(db_err)?;
         row.map(|r| r.into_domain()).transpose()
     }
+
+    /// Kembalikan pekerjaan ke Pending untuk dicoba lagi (retry operator):
+    /// status Pending, attempts=0, next_retry_at NULL, last_error NULL.
+    /// Tidak menyentuh `satusehat_*` baris sumber (tidak seperti
+    /// `mark_outbox_sent(..., Dead, ...)` yang menandai sumber 'gagal').
+    pub async fn retry_outbox(&self, id: &str) -> Result<(), WarasError> {
+        let n = sqlx::query(
+            "UPDATE outbox SET status = 'pending', attempts = 0,
+                 next_retry_at = NULL, last_error = NULL, updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(fmt_dt(now_naive()))
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+        if n == 0 {
+            return Err(WarasError::NotFound(format!("outbox {id} tidak ditemukan")));
+        }
+        Ok(())
+    }
+
+    /// Batalkan pekerjaan (keputusan operator): status Dead, tanpa
+    /// menyentuh `satusehat_*` baris sumber.
+    pub async fn cancel_outbox(&self, id: &str) -> Result<(), WarasError> {
+        let n = sqlx::query(
+            "UPDATE outbox SET status = 'dead', last_error = 'dibatalkan operator',
+                 updated_at = ? WHERE id = ?",
+        )
+        .bind(fmt_dt(now_naive()))
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+        if n == 0 {
+            return Err(WarasError::NotFound(format!("outbox {id} tidak ditemukan")));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
