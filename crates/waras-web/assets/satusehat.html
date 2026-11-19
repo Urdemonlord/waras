@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SATUSEHAT — FHIR R4 — WARAS</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body data-page="satusehat">
+<div class="shell">
+<aside class="sidebar">
+  <div class="brand">
+    <img src="/waras-tile-sharp.png" alt="Logo WARAS">
+    <div><div class="name">WARAS</div><div class="sub">SIMRS open source · v1.0</div></div>
+  </div>
+  <nav class="nav">
+<div class="nav-group">PELAYANAN</div>
+<a class="nav-item" data-nav="dashboard" href="/dashboard"><img class="ic" src="/icons/house-CBD5E1.png" alt="">Dashboard</a>
+<a class="nav-item" data-nav="registrasi" href="/registrasi"><img class="ic" src="/icons/pencil-CBD5E1.png" alt="">Registrasi & Antrean</a>
+<a class="nav-item" data-nav="rme" href="/rme?pasien=RM-000812"><img class="ic" src="/icons/stethoscope-CBD5E1.png" alt="">Rekam Medis (RME)</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/arrow-right-CBD5E1.png" alt="">Rawat Jalan<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/zap-CBD5E1.png" alt="">IGD<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/heart-pulse-CBD5E1.png" alt="">Rawat Inap<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/scissors-CBD5E1.png" alt="">Kamar Operasi & Bersalin<span class="tag-segera">segera</span></a>
+<a class="nav-item" data-nav="farmasi" href="/farmasi"><img class="ic" src="/icons/cross-CBD5E1.png" alt="">Farmasi</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/flask-conical-CBD5E1.png" alt="">Laboratorium<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/crosshair-CBD5E1.png" alt="">Radiologi<span class="tag-segera">segera</span></a>
+<div class="nav-group">KEUANGAN</div>
+<a class="nav-item" data-nav="billing" href="/billing"><img class="ic" src="/icons/scale-CBD5E1.png" alt="">Billing & Kasir</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/layout-grid-CBD5E1.png" alt="">Casemix (INA-CBG)<span class="tag-segera">segera</span></a>
+<div class="nav-group">OPERASIONAL</div>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/copy-CBD5E1.png" alt="">Inventori<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/users-CBD5E1.png" alt="">Kepegawaian<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/file-text-CBD5E1.png" alt="">Laporan & SIRS<span class="tag-segera">segera</span></a>
+<div class="nav-group">INTEGRASI</div>
+<a class="nav-item" data-nav="satusehat" href="/satusehat"><img class="ic" src="/icons/rotate-cw-CBD5E1.png" alt="">SATUSEHAT (FHIR)</a>
+<a class="nav-item" data-nav="bpjs" href="/bpjs"><img class="ic" src="/icons/flag-CBD5E1.png" alt="">BPJS · VClaim / PCare</a>
+<a class="nav-item" data-nav="antrean" href="/antrean-online"><img class="ic" src="/icons/clock-CBD5E1.png" alt="">Antrean Online & Aplicares</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/command-CBD5E1.png" alt="">API Publik<span class="tag-segera">segera</span></a>
+<div class="nav-group">SISTEM</div>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/settings-CBD5E1.png" alt="">Pengaturan & Audit<span class="tag-segera">segera</span></a>
+  </nav>
+  <div class="sidebar-foot">RSUD Waras · Semarang<div class="mode">v1.0 · Mode Klinik · SQLite</div></div>
+</aside>
+<main class="main">
+<header class="topbar">
+  <div class="search">
+    <img class="ic-search" src="/icons/search-667085.png" alt="">
+    <input id="top-search" type="search" placeholder="Cari pasien, NIK, RM…" autocomplete="off">
+    <kbd>⌘K</kbd>
+    <div class="search-results" id="search-results"></div>
+  </div>
+  <div class="spacer"></div>
+  <button class="icon-btn" title="Profil" aria-label="Profil"><img src="/icons/circle-user-round-374151.png" alt=""></button>
+  <button class="icon-btn" id="bell-btn" title="Notifikasi" aria-label="Notifikasi"><img src="/icons/mail-374151.png" alt=""><span class="red-dot" id="bell-dot"></span></button>
+  <div class="me">
+    <span class="avatar" id="me-avatar">AH</span>
+    <span><span class="me-name" id="me-name">dr. Ahmad Hidayat</span><br><span class="me-role" id="me-role">Dokter Umum</span></span>
+  </div>
+</header>
+<div class="content">
+<div class="page-head"><h1>SATUSEHAT — FHIR R4</h1><div class="sub">Pengiriman resource · Validasi sandbox · Antrian sinkron</div></div>
+
+<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+  <span class="muted" style="font-size:13px">Status jembatan:</span>
+  <div class="pills-row" id="bridge-pills"><span class="pill neutral"><i class="dot"></i>Memuat…</span></div>
+</div>
+<div class="grid" style="grid-template-columns:repeat(4,1fr)">
+  <div class="kpi"><div class="kpi-label">Resource terkirim <img class="ic" src="/icons/rotate-cw-0B7285.png" alt=""></div><div class="kpi-value accent" id="kpi-sent">—</div><div class="kpi-sub">Diakui tujuan (Acked)</div></div>
+  <div class="kpi"><div class="kpi-label">Gagal validasi <img class="ic" src="/icons/triangle-alert-DC2626.png" alt=""></div><div class="kpi-value danger" id="kpi-dead">—</div><div class="kpi-sub">Perlu perbaikan mapping</div></div>
+  <div class="kpi"><div class="kpi-label">Antrean tertunda <img class="ic" src="/icons/clock-0B7285.png" alt=""></div><div class="kpi-value" id="kpi-pending">—</div><div class="kpi-sub">Sinkron saat offline aktif</div></div>
+  <div class="kpi"><div class="kpi-label">Resource terpetakan <img class="ic" src="/icons/layout-grid-0B7285.png" alt=""></div><div class="kpi-value" id="kpi-mapped">—</div><div class="kpi-sub">Target Kemenkes</div></div>
+</div>
+<div class="grid c2w" style="margin-top:16px">
+  <div class="card">
+    <div class="card-head"><img class="ic" src="/icons/layout-grid-0B7285.png" alt=""><h2>Resource FHIR prioritas</h2><a class="link" href="#" data-soon>Validasi sandbox</a></div>
+    <table class="tbl"><thead><tr><th>Resource</th><th class="num">Jumlah</th><th>Terakhir kirim</th><th>Status</th></tr></thead>
+    <tbody id="resource-body"><tr><td colspan="4" class="empty-note">Memuat resource…</td></tr></tbody></table>
+    <p class="muted small" id="resource-note" style="margin:10px 0 0">Jumlah = kiriman di outbox per resource (terkirim + gagal + tertunda).</p>
+  </div>
+  <div class="card">
+    <div class="card-head"><img class="ic" src="/icons/triangle-alert-B45309.png" alt=""><h2>Log validasi</h2><a class="link" href="#" data-soon>Lihat log</a></div>
+    <div id="validation-log"><p class="empty-note">Memuat log validasi…</p></div>
+    <p style="margin:12px 0 0" id="sandbox-pill"></p>
+  </div>
+</div>
+<div class="card" style="margin-top:16px">
+  <div class="card-head"><img class="ic" src="/icons/settings-0B7285.png" alt=""><h2>Mode offline</h2><a class="link" href="#" data-soon>Pengaturan sinkron</a></div>
+  <p style="margin:0">Internet terputus pukul 08.15–08.40: 214 resource masuk antrean lokal dan terkirim otomatis pukul 08.41 tanpa input ulang. Semua pengiriman tercatat di audit trail.</p>
+</div>
+
+</div>
+</main>
+</div>
+<div id="toast"></div>
+<script src="/js/app.js"></script>
+<script src="/js/satusehat.js"></script>
+</body>
+</html>

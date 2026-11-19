@@ -102,6 +102,10 @@ pub fn router(state: AppState) -> Router {
         .route("/rme", get(web::serve_rme))
         .route("/farmasi", get(web::serve_farmasi))
         .route("/billing", get(web::serve_billing))
+        // -- UI Fase 2 (FASE2.md §6) --------------------------------------
+        .route("/satusehat", get(web::serve_satusehat))
+        .route("/bpjs", get(web::serve_bpjs))
+        .route("/antrean-online", get(web::serve_antrean))
         .route("/assets/{*path}", get(web::serve_assets))
         .route("/css/{*path}", get(web::serve_css))
         .route("/js/{*path}", get(web::serve_js))
