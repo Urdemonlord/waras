@@ -10,6 +10,13 @@ Repo ini adalah implementasi **Fase 1 — Inti Klinis** dari paper desain
 v4) dan desain UI FigCraft v16 (`~/workspace/waras/figcraft/`, file
 `waras-full-v16-lucide.figcraft`).
 
+## Demo live
+
+https://waras.meowlabs.id — deploy 19 November 2026, commit `6ee6835`,
+`waras.service` di VPS Meow Labs (port internal 3200, nginx +
+Let's Encrypt, DNS A record via Cloudflare). Login memakai akun seed
+di bawah.
+
 ## Menjalankan (satu perintah)
 
 ```sh
