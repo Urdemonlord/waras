@@ -804,3 +804,24 @@ async fn insert_appointment(
     .map_err(db_err)?;
     Ok(())
 }
+
+impl Db {
+    /// Seed Fase 2 bila tabel `seps` masih kosong (FASE2.md §2.2).
+    ///
+    /// Alasan: `seed()` hanya dipanggil `seed_if_empty` bila `users`
+    /// kosong. DB Fase 1 yang sudah ada lalu mendapat migrasi 0002
+    /// tidak pernah menjalankan `seed()` lagi, jadi tabel Fase 2-nya
+    /// tetap kosong. Dipanggil binary sekali saat boot, tepat setelah
+    /// `seed_if_empty()`. Mengembalikan `true` bila seed dijalankan.
+    pub async fn seed_fase2_if_empty(&self) -> Result<bool, waras_core::WarasError> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seps")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db_err)?;
+        if n > 0 {
+            return Ok(false);
+        }
+        seed_fase2(self).await?;
+        Ok(true)
+    }
+}

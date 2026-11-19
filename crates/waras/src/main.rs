@@ -14,7 +14,8 @@
 
 use std::{net::SocketAddr, sync::Arc};
 
-use waras_api::{router, AppState};
+use waras_api::{router, worker, AppState};
+use waras_bridge::{build_registry, BridgeConfig};
 use waras_db::Db;
 
 #[tokio::main]
@@ -39,6 +40,38 @@ async fn main() {
     db.seed_if_empty()
         .await
         .expect("gagal memuat data seed Fase 1");
+    // Fase 2: DB Fase 1 yang sudah ada tidak menjalankan `seed()` lagi,
+    // jadi seed tabel Fase 2 (SEP/antrean/bed/rujukan/PCare/klaim) bila
+    // masih kosong.
+    if db
+        .seed_fase2_if_empty()
+        .await
+        .expect("gagal memuat data seed Fase 2")
+    {
+        tracing::info!("Seed Fase 2 dimuat (tabel seps masih kosong)");
+    }
+
+    // Jembatan nasional (FASE2.md §5/§7): config dari env, registry
+    // berisi adapter nyata bila terkonfigurasi, `DisabledBridge` bila
+    // belum. Worker memakai Db + registry yang SAMA dengan AppState.
+    let bridge_config = BridgeConfig::from_env();
+    let bridges = Arc::new(build_registry(&bridge_config));
+    let db = Arc::new(db);
+    if bridge_config.worker_enabled {
+        let worker_db = db.clone();
+        let worker_bridges = bridges.clone();
+        let worker_config = bridge_config.clone();
+        tokio::spawn(async move {
+            worker::run_worker(worker_db, worker_bridges, worker_config).await;
+        });
+        tracing::info!(
+            "Worker outbox aktif (interval {} dtk, batch {})",
+            bridge_config.worker_interval_secs,
+            bridge_config.worker_batch
+        );
+    } else {
+        tracing::info!("Worker outbox nonaktif (WARAS_WORKER_ENABLED=false)");
+    }
 
     let today = waras_db::clinic_today();
     let addr: SocketAddr = format!("{host}:{port}")
@@ -54,7 +87,11 @@ async fn main() {
     );
     tracing::info!("Login seed: NIP 198505122010011001 (dr. Ahmad Hidayat) / kata sandi waras123");
 
-    let app = router(AppState { db: Arc::new(db) });
+    let app = router(AppState {
+        db,
+        bridges,
+        bridge_config,
+    });
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("gagal bind ke alamat");

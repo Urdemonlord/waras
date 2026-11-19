@@ -10,10 +10,12 @@
 //! `{ "error": { "code": "...", "message": "..." } }`.
 
 pub mod auth;
+pub mod bridge_handlers;
 pub mod error;
 pub mod handlers;
 pub mod parse;
 pub mod web;
+pub mod worker;
 
 #[cfg(test)]
 mod tests;
@@ -24,12 +26,19 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use waras_bridge::{BridgeConfig, BridgeRegistry};
 use waras_db::Db;
 
 /// State aplikasi yang dibagikan ke semua handler.
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Db>,
+    /// Registry adapter jembatan (Fase 2, §5): dipakai worker + handler
+    /// yang butuh panggilan live. Tujuan yang belum dikonfigurasi tetap
+    /// terdaftar sebagai `DisabledBridge`.
+    pub bridges: Arc<BridgeRegistry>,
+    /// Konfigurasi jembatan + worker dari env (Fase 2, §7).
+    pub bridge_config: BridgeConfig,
 }
 
 /// Router lengkap: API (`/api/...`) + UI statis dari `waras-web`.
@@ -61,6 +70,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/encounters/{id}", get(get_encounter))
         .route("/api/encounters/{id}/fhir", get(get_encounter_fhir))
+        .route("/api/encounters/{id}/close", post(close_encounter))
         .route(
             "/api/encounters/{id}/soap",
             get(get_soap).put(save_soap),
@@ -94,6 +104,58 @@ pub fn router(state: AppState) -> Router {
         .route("/api/invoices/{id}/pay", post(pay_invoice))
         .route("/api/audit", get(list_audit))
         .route("/api/notifications", get(list_notifications))
+        // -- Jembatan nasional Fase 2 (FASE2.md §5) -----------------------
+        .route("/api/bridges", get(bridge_handlers::list_bridges))
+        .route(
+            "/api/bridges/{destination}",
+            get(bridge_handlers::get_bridge),
+        )
+        .route("/api/outbox", get(bridge_handlers::list_outbox))
+        .route(
+            "/api/outbox/{id}/retry",
+            post(bridge_handlers::retry_outbox),
+        )
+        .route(
+            "/api/outbox/{id}/cancel",
+            post(bridge_handlers::cancel_outbox),
+        )
+        .route(
+            "/api/seps",
+            get(bridge_handlers::list_seps).post(bridge_handlers::create_sep),
+        )
+        .route("/api/seps/{id}", get(bridge_handlers::get_sep))
+        .route(
+            "/api/seps/{id}/cancel",
+            post(bridge_handlers::cancel_sep),
+        )
+        .route("/api/bpjs/peserta", get(bridge_handlers::check_peserta))
+        .route(
+            "/api/referrals",
+            get(bridge_handlers::list_referrals).post(bridge_handlers::create_referral),
+        )
+        .route(
+            "/api/pcare/visits",
+            get(bridge_handlers::list_pcare_visits).post(bridge_handlers::create_pcare_visit),
+        )
+        .route(
+            "/api/antrean-online",
+            get(bridge_handlers::list_online_queue),
+        )
+        .route(
+            "/api/antrean-online/sync",
+            post(bridge_handlers::sync_online_queue),
+        )
+        .route("/api/beds", get(bridge_handlers::list_beds))
+        .route("/api/beds/refresh", post(bridge_handlers::refresh_beds))
+        .route(
+            "/api/claims",
+            get(bridge_handlers::list_claims).post(bridge_handlers::create_claim),
+        )
+        .route("/api/claims/{id}", get(bridge_handlers::get_claim))
+        .route(
+            "/api/satusehat/resources",
+            get(bridge_handlers::satusehat_resources),
+        )
         // -- UI statis (waras-web, rust-embed) ----------------------------
         .route("/", get(web::serve_index))
         .route("/index.html", get(web::serve_index))

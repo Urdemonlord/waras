@@ -8,7 +8,7 @@ use crate::{
 use waras_core::{
     ids,
     types::{
-        Condition, ConditionGroup, ConditionStatus, Encounter, Observation,
+        Condition, ConditionGroup, ConditionStatus, Encounter, EncounterStatus, Observation,
         SoapNote, SoapStatus, VitalCode,
     },
     WarasError,
@@ -65,6 +65,25 @@ impl Db {
                 .await
                 .map_err(db_err)?;
         row.map(|r| r.into_domain()).transpose()
+    }
+
+    /// Ubah status encounter (dipakai `close_encounter` Fase 2: -> Selesai).
+    pub async fn set_encounter_status(
+        &self,
+        id: &str,
+        status: EncounterStatus,
+    ) -> Result<(), WarasError> {
+        let n = sqlx::query("UPDATE encounters SET status = ? WHERE id = ?")
+            .bind(encounter_status_to_str(status))
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?
+            .rows_affected();
+        if n == 0 {
+            return Err(WarasError::NotFound(format!("encounter {id} tidak ditemukan")));
+        }
+        Ok(())
     }
 
     pub async fn list_encounters(

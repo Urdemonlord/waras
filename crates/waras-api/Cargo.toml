@@ -8,6 +8,7 @@ license = "Apache-2.0"
 [dependencies]
 waras-core.workspace = true
 waras-db.workspace = true
+waras-bridge = { path = "../waras-bridge" }
 waras-web.workspace = true
 tokio.workspace = true
 axum.workspace = true
