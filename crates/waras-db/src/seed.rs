@@ -583,6 +583,191 @@ pub async fn seed(db: &Db) -> Result<(), waras_core::WarasError> {
         db.insert_audit_at(ts, actor, action, rtype, rid, details).await?;
     }
 
+    // -- Fase 2 (FASE2.md §2.2): SEP, antrean online, bed, rujukan, PCare,
+    // klaim. Outbox sengaja KOSONG saat seed (tidak ada kiriman palsu).
+    seed_fase2(db).await?;
+
+    Ok(())
+}
+
+/// Seed Fase 2 (FASE2.md §2.2). Idempotent: hanya jalan bila tabel `seps`
+/// kosong. Data dari layar desain v16, tanggal klinik 2026-11-19.
+///
+/// Catatan yang tidak ditentukan kontrak (dicatat agar bisa diaudit):
+/// - nomor kartu BPJS di baris SEP diambil VERBATIM dari FASE2.md §2.2
+///   (0001234567890..97 berurutan). Nomor ini TIDAK cocok dengan
+///   `bpjs_number` pasien Fase 1 untuk Agus/Bambang/Dewi/Rina/Ahmad/Putri
+///   (Fase 1: Agus 92, Dewi tanpa BPJS, Rina 93, Ahmad 94, Putri 95,
+///   Bambang tanpa BPJS); kolom SEP hanya membawa nomor yang ditulis
+///   kontrak, bukan FK ke pasien.
+/// - `online_queue` JKN-881202 berstatus Hadir tanpa `local_queue_id`:
+///   kontrak hanya menyebut local A-041 untuk JKN-881201, jadi yang lain
+///   dibiarkan NULL (tidak ditebak).
+/// - `bed_availability` dibaca sebagai tersedia/total (FASE2.md §6:
+///   panel Aplicares menampilkan "tersedia/total"), mis. Kelas 1 = 12
+///   tersedia dari 16.
+/// - `referrals.reason` = "Bedah Saraf" (tanda kurung di §2.2) dengan
+///   `to_facility` = "RSUD Dr. Kariadi"; `from_poli` mengikuti encounter
+///   pasien hari itu (Rina Poli Umum, Budi Poli Anak).
+/// - `pcare_visits.status` = "Tercatat"; `claims.ina_cbg_code` = "J-4-17-I"
+///   adalah kode INA-CBG CONTOH, bukan grouping sungguhan (FASE2.md §2.2).
+async fn seed_fase2(db: &Db) -> Result<(), waras_core::WarasError> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seps")
+        .fetch_one(&db.pool)
+        .await
+        .map_err(db_err)?;
+    if n > 0 {
+        return Ok(());
+    }
+    let today = clinic_today();
+    let t = |hh: u32, mm: u32| fmt_dt(dt(today, hh, mm));
+
+    // -- SEP (8): (id, patient, encounter, bpjs, jenis, poli, status) -------
+    // encounter_id: SEP rawat jalan hari itu menaut ke encounter pasien.
+    let seps: [(&str, &str, Option<&str>, &str, &str, &str, &str); 8] = [
+        ("SEP-20261119-001", "RM-000812", Some("ENC-2026-11-19-014"), "0001234567890",
+         "RawatJalan", "Poli Umum", "aktif"),
+        ("SEP-20261119-002", "RM-000813", Some("ENC-2026-11-19-015"), "0001234567891",
+         "RawatJalan", "Poli Anak", "aktif"),
+        ("SEP-20261119-003", "RM-000820", None, "0001234567892",
+         "RawatInap", "Melati", "aktif"),
+        ("SEP-20261119-004", "RM-000814", Some("ENC-2026-11-19-016"), "0001234567893",
+         "RawatJalan", "Penyakit Dalam", "aktif"),
+        ("SEP-20261119-005", "RM-000815", Some("ENC-2026-11-19-017"), "0001234567894",
+         "RawatJalan", "Gigi", "gagal"),
+        ("SEP-20261119-006", "RM-000816", Some("ENC-2026-11-19-018"), "0001234567895",
+         "RawatInap", "Cempaka", "aktif"),
+        ("SEP-20261119-007", "RM-000818", None, "0001234567896",
+         "RawatJalan", "Poli Umum", "aktif"),
+        ("SEP-20261119-008", "RM-000819", None, "0001234567897",
+         "RawatJalan", "Poli Anak", "aktif"),
+    ];
+    for (id, patient, encounter, bpjs, jenis, poli, status) in seps {
+        sqlx::query(
+            "INSERT INTO seps (id, sep_number, patient_id, encounter_id, bpjs_number,
+                 jenis, poli, status, created_by, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'dr. Ahmad Hidayat', ?)",
+        )
+        .bind(id)
+        .bind(id)
+        .bind(patient)
+        .bind(encounter)
+        .bind(bpjs)
+        .bind(jenis)
+        .bind(poli)
+        .bind(status)
+        .bind(t(7, 30))
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+
+    // -- Antrean online (7): (booking, patient, poli, estimasi, status, local)
+    let queue: [(&str, &str, &str, &str, &str, Option<&str>); 7] = [
+        ("JKN-881201", "RM-000812", "Poli Umum", "07.30", "Hadir", Some("A-041")),
+        ("JKN-881202", "RM-000813", "Poli Anak", "08.00", "Hadir", None),
+        ("JKN-881203", "RM-000814", "Penyakit Dalam", "08.30", "Menunggu", None),
+        ("JKN-881204", "RM-000815", "Gigi", "09.00", "Menunggu", None),
+        ("JKN-881205", "RM-000816", "Poli Umum", "09.15", "Menunggu", None),
+        ("JKN-881206", "RM-000818", "Poli Umum", "09.30", "Menunggu", None),
+        ("JKN-881207", "RM-000819", "Poli Anak", "09.45", "Menunggu", None),
+    ];
+    for (code, patient, poli, estimasi, status, local) in queue {
+        sqlx::query(
+            "INSERT INTO online_queue (id, booking_code, patient_id, poli, estimasi,
+                 status, local_queue_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(code)
+        .bind(code)
+        .bind(patient)
+        .bind(poli)
+        .bind(estimasi)
+        .bind(status)
+        .bind(local)
+        .bind(t(7, 30))
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+
+    // -- Bed (5): (class, available, total) -----------------------------------
+    let beds: [(&str, i64, i64); 5] = [
+        ("Kelas 1", 12, 16),
+        ("Kelas 2", 24, 32),
+        ("Kelas 3", 38, 48),
+        ("VIP", 6, 8),
+        ("ICU", 0, 12),
+    ];
+    for (class, available, total) in beds {
+        sqlx::query(
+            "INSERT INTO bed_availability (class, total, available, updated_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(class)
+        .bind(total)
+        .bind(available)
+        .bind(t(7, 30))
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+
+    // -- Rujukan (2) -----------------------------------------------------------
+    let referrals: [(&str, &str, &str, &str); 2] = [
+        ("RUJ-20261119-001", "RM-000816", "Poli Umum", "RSUD Dr. Kariadi"),
+        ("RUJ-20261119-002", "RM-000813", "Poli Anak", "RSUD Dr. Kariadi"),
+    ];
+    for (id, patient, from_poli, to_facility) in referrals {
+        sqlx::query(
+            "INSERT INTO referrals (id, patient_id, from_poli, to_facility, reason,
+                 status, created_at)
+             VALUES (?, ?, ?, ?, 'Bedah Saraf', 'menunggu', ?)",
+        )
+        .bind(id)
+        .bind(patient)
+        .bind(from_poli)
+        .bind(to_facility)
+        .bind(t(7, 30))
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+
+    // -- Kunjungan PCare (3): Siti, Budi, Dewi, poli masing-masing ------------
+    let visits: [(&str, &str, &str); 3] = [
+        ("PCV-20261119-001", "RM-000812", "Poli Umum"),
+        ("PCV-20261119-002", "RM-000813", "Poli Anak"),
+        ("PCV-20261119-003", "RM-000814", "Penyakit Dalam"),
+    ];
+    for (id, patient, poli) in visits {
+        sqlx::query(
+            "INSERT INTO pcare_visits (id, patient_id, visit_date, poli, status, created_at)
+             VALUES (?, ?, ?, ?, 'Tercatat', ?)",
+        )
+        .bind(id)
+        .bind(patient)
+        .bind(today.to_string())
+        .bind(poli)
+        .bind(t(7, 30))
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+
+    // -- Klaim (1): draft contoh; kode INA-CBG BUKAN grouping sungguhan ------
+    sqlx::query(
+        "INSERT INTO claims (id, invoice_id, sep_id, ina_cbg_code, amount,
+             status, submitted_at, created_at)
+         VALUES ('CLM-20261119-001', 'INV-2026-1181', 'SEP-20261119-001',
+             'J-4-17-I', 185000, 'draft', NULL, ?)",
+    )
+    .bind(t(7, 30))
+    .execute(&db.pool)
+    .await
+    .map_err(db_err)?;
+
+    // Outbox: KOSONG saat seed (tidak ada kiriman palsu).
     Ok(())
 }
 

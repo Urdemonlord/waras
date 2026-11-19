@@ -10,6 +10,7 @@
 //! Tidak ada macro `query!`/`query_as!` (butuh DB saat compile).
 
 mod audit;
+mod claims;
 mod convert;
 mod dashboard;
 mod drugs;
@@ -17,11 +18,13 @@ mod encounters;
 mod fhir_data;
 mod invoices;
 mod notifications;
+mod outbox;
 mod patients;
 mod prescriptions;
 mod queue;
 mod rows;
 mod seed;
+mod seps;
 mod users;
 
 pub use seed::seed;
