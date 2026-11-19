@@ -207,18 +207,26 @@ cache). Round-trip enkripsi/dekripsi diuji, termasuk end-to-end lewat
 stub yang mengenkripsi respons dengan timestamp dari header request.
 
 **Batasan yang diketahui (jujur):**
-- **SEP bisa terkirim dua kali ke BPJS.** Nomor SEP lokal dibuat
-  dulu (`SEP-20261119-009`), lalu worker mengirim ulang insert SEP
-  yang sama (adapter tidak punya lookup idempotensi ke BPJS). Terhadap
-  stub teramati dua POST insert identik. Sebelum live, tambahkan cek
-  "SEP sudah ada?" di adapter VClaim.
+- **SEP double-submit — DIPERBAIKI (20 Nov 2026).** Dulu nomor SEP lokal
+  dibuat dulu lalu worker mengirim ulang insert yang sama (teramati dua
+  POST insert identik ke stub). Sekarang: handler single-send (pre-check
+  lokal + insert live sekali + nomor BPJS ditulis ke `seps.bpjs_sep_number`
+  + job outbox langsung Acked), guard adapter `GET SEP/{noSep}` sebelum
+  insert, dan kunci idempotensi outbox. Nomor otoritatif yang dikenal
+  BPJS adalah `seps.bpjs_sep_number` (= `outbox.external_id`); nomor
+  lokal hanya kunci internal. Catatan: endpoint lookup `GET SEP/{noSep}`
+  dikonfirmasi via DeepWiki SDK `ssecd/jkn` (sumber sekunder, SDK sudah
+  diuji terhadap API VClaim asli), belum lewat portal resmi BPJS —
+  konfirmasi saat uji sandbox live dengan kredensial asli.
 - **Encounter ditutup mengirim satu resource Encounter, bukan Bundle.**
   Adapter SATUSEHAT menolak Bundle (tidak ada `subject` tingkat atas)
   dan sync-back `satusehat_id` hanya memetakan resource `Encounter`;
   bundle lengkap tetap tersedia di `GET /api/encounters/{id}/fhir`.
-- **Idempotensi dijamin outbox, bukan adapter:** adapter mengirim ulang
-  job yang sama sebagai HTTP baru; outbox yang mencegah duplikat lewat
-  `idempotency_key`.
+- **Idempotensi dijamin outbox, bukan adapter — kecuali SEP:** adapter
+  mengirim ulang job yang sama sebagai HTTP baru; outbox yang mencegah
+  duplikat lewat `idempotency_key`. Pengecualian: SEP VClaim punya guard
+  adapter sendiri (`GET SEP/{noSep}` sebelum insert) di samping
+  single-send handler + kunci idempotensi, lihat butir di atas.
 - **KPI jembatan dihitung dari data nyata** (bukan angka desain 12.480 /
   96 / 182): SEP hari ini = 8 baris seed, kunjungan PCare = 3, resource
   terkirim = jumlah outbox Acked. Kecil, tapi jujur.

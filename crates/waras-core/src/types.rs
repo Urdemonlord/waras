@@ -712,6 +712,14 @@ pub struct Sep {
     /// Id lokal, sama dengan nomor SEP (`SEP-20261119-001`).
     pub id: String,
     pub sep_number: String,
+    /// Nomor SEP yang diterbitkan BPJS (hasil `SEP/2.0/insert`,
+    /// `response.sep.noSep`). `None` bila SEP belum pernah terkirim ke
+    /// BPJS (seed lokal, atau insert live gagal dan worker belum
+    /// berhasil). **Otoritatif untuk segala urusan ke BPJS** (lookup
+    /// `SEP/{noSep}`, batal, klaim); `sep_number` lokal hanya kunci
+    /// internal (tautan tagihan, tampilan bila nomor BPJS belum ada).
+    /// Selalu sama dengan outbox `external_id` job SEP-nya bila ada.
+    pub bpjs_sep_number: Option<String>,
     pub patient_id: String,
     pub encounter_id: Option<String>,
     /// Nomor kartu BPJS peserta.

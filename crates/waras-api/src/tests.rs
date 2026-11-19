@@ -827,6 +827,10 @@ use std::net::SocketAddr;
 #[derive(Default)]
 struct StubInner {
     fail_times: usize,
+    /// Gagalkan sekali tiap request yang path-nya mengandung salah satu
+    /// string ini (dipakai menguji jalur gagal yang spesifik, mis. hanya
+    /// insert SEP sementara eligibilitas tetap sukses).
+    fail_once_paths: Vec<String>,
     envelope_override: Option<(String, String)>,
     requests: Vec<(String, String, Value)>,
 }
@@ -845,6 +849,12 @@ impl StubState {
         self.inner.lock().unwrap().fail_times = n;
     }
 
+    /// Gagalkan satu kali request yang path-nya mengandung tiap string.
+    fn set_fail_once_paths(&self, paths: &[&str]) {
+        self.inner.lock().unwrap().fail_once_paths =
+            paths.iter().map(|s| s.to_string()).collect();
+    }
+
     fn set_envelope_override(&self, code: &str, message: &str) {
         self.inner.lock().unwrap().envelope_override =
             Some((code.to_string(), message.to_string()));
@@ -859,8 +869,18 @@ impl StubState {
     }
 
     /// `true` bila panggilan ini harus gagal 500 (dan kurangi hitungan).
-    fn should_fail(&self) -> bool {
+    /// Cek dulu `fail_once_paths` (cocok substring path, sekali pakai),
+    /// lalu hitungan `fail_times` global.
+    fn should_fail(&self, path: &str) -> bool {
         let mut inner = self.inner.lock().unwrap();
+        if let Some(i) = inner
+            .fail_once_paths
+            .iter()
+            .position(|p| path.contains(p.as_str()))
+        {
+            inner.fail_once_paths.remove(i);
+            return true;
+        }
         if inner.fail_times > 0 {
             inner.fail_times -= 1;
             true
@@ -893,7 +913,7 @@ async fn satusehat_fhir_handler(
 ) -> (StatusCode, Json<Value>) {
     let body_json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     state.record("POST", &format!("/fhir-r4/v1/{path}"), body_json);
-    if state.should_fail() {
+    if state.should_fail(&format!("/fhir-r4/v1/{path}")) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
@@ -960,7 +980,7 @@ async fn bpjs_handler(
 ) -> (StatusCode, Json<Value>) {
     let body_json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     state.record(&method.to_string(), &format!("/{path}"), body_json.clone());
-    if state.should_fail() {
+    if state.should_fail(&path) {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"metaData": {"code": "500", "message": "stub gagal 500"}, "response": null})),
@@ -1329,9 +1349,9 @@ async fn sep_create_via_stub_vclaim_returns_number_and_links_invoice() {
             "/api/seps",
             Some(&token),
             Some(json!({
-                "patient_id": "RM-000812",
-                "encounter_id": "ENC-2026-11-19-014",
-                "bpjs_number": "0001234567890",
+                "patient_id": "RM-000821",
+                "encounter_id": "ENC-2026-11-19-020",
+                "bpjs_number": "0001234567898",
                 "jenis": "RawatJalan",
                 "poli": "Poli Umum",
             })),
@@ -1342,6 +1362,8 @@ async fn sep_create_via_stub_vclaim_returns_number_and_links_invoice() {
     assert_eq!(v["sep_number"], "SEP-20261119-009");
     assert_eq!(v["id"], "SEP-20261119-009");
     assert_eq!(v["status"], "aktif");
+    // Nomor SEP BPJS hasil insert live langsung mendarat di baris SEP.
+    assert_eq!(v["bpjs_sep_number"], "SEP-CONTOH-001");
 
     // SEP tertaut ke tagihan encounter-nya (INV-2026-1181).
     let (s, v, _) = call(
@@ -1350,37 +1372,218 @@ async fn sep_create_via_stub_vclaim_returns_number_and_links_invoice() {
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    assert_eq!(v["invoice"]["id"], "INV-2026-1181");
+    assert_eq!(v["invoice"]["id"], "INV-2026-1186");
 
-    // Enqueue VClaim SEP.
+    // Satu pengiriman saja (FASE2.md §9): job outbox langsung Acked
+    // (bukan Pending), external_id = nomor SEP BPJS.
     let jobs = outbox_jobs(&app, &token, "?destination=vclaim&limit=100").await;
     let jobs = jobs.as_array().expect("array outbox").clone();
     assert_eq!(jobs.len(), 1, "{jobs:?}");
     assert_eq!(jobs[0]["resource_type"], "SEP");
-    assert_eq!(jobs[0]["status"], "pending");
+    assert_eq!(jobs[0]["status"], "acked");
+    assert_eq!(jobs[0]["external_id"], "SEP-CONTOH-001");
     assert_eq!(
         jobs[0]["idempotency_key"],
         "vclaim:SEP:SEP-20261119-009:created"
     );
 
-    // Stub menerima cek eligibilitas (GET Peserta) + insert SEP.
+    // Stub menerima cek eligibilitas (GET Peserta) + insert SEP SEKALI.
     let reqs = stub.requests();
     assert!(reqs
         .iter()
-        .any(|(_, p, _)| p.contains("Peserta/nik/3374021205850001/tglSEP/2026-11-19")));
-    assert!(reqs.iter().any(|(_, p, _)| p.contains("SEP/2.0/insert")));
+        .any(|(_, p, _)| p.contains("Peserta/nik/3374033009800010/tglSEP/2026-11-19")));
+    assert_eq!(
+        reqs.iter()
+            .filter(|(_, p, _)| p.contains("SEP/2.0/insert"))
+            .count(),
+        1,
+        "insert live tepat sekali: {reqs:?}"
+    );
 
-    // Worker satu pass: job SEP ter-ack.
+    // Worker satu pass: job sudah Acked, TIDAK ada insert kedua.
     let registry = build_registry(&config);
     worker::run_once(&db, &registry, &config, worker_now()).await;
     let jobs = outbox_jobs(&app, &token, "?destination=vclaim&limit=100").await;
     let jobs = jobs.as_array().expect("array outbox").clone();
     assert_eq!(jobs[0]["status"], "acked");
     assert_eq!(jobs[0]["external_id"], "SEP-CONTOH-001");
+    assert_eq!(
+        stub.requests()
+            .iter()
+            .filter(|(_, p, _)| p.contains("SEP/2.0/insert"))
+            .count(),
+        1,
+        "worker tidak mengirim ulang insert: {:?}",
+        stub.requests()
+    );
+}
+
+#[tokio::test]
+async fn sep_create_twice_returns_existing_without_second_insert() {
+    // Idempotensi lokal (FASE2.md §9): POST kedua untuk encounter yang
+    // sama mengembalikan SEP yang sudah Aktif (200), tanpa panggilan
+    // BPJS apa pun.
+    let (stub, addr) = spawn_bpjs_stub().await;
+    let config = bpjs_stub_config(addr);
+    let (app, _db) = seeded_app_with_config(config).await;
+    let token = login_as(&app, "ahmad").await;
+    let body = json!({
+        "patient_id": "RM-000821",
+        "encounter_id": "ENC-2026-11-19-020",
+        "bpjs_number": "0001234567898",
+        "jenis": "RawatJalan",
+        "poli": "Poli Umum",
+    });
+    let (s, v, _) = call(app.clone(), req("POST", "/api/seps", Some(&token), Some(body.clone()))).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["bpjs_sep_number"], "SEP-CONTOH-001");
+    let (s, v, _) = call(app.clone(), req("POST", "/api/seps", Some(&token), Some(body))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["id"], "SEP-20261119-009");
+    assert_eq!(v["bpjs_sep_number"], "SEP-CONTOH-001");
+    // Tetap 1 insert + 1 cek eligibilitas (POST kedua tidak memanggil).
+    let reqs = stub.requests();
+    assert_eq!(
+        reqs.iter().filter(|(_, p, _)| p.contains("SEP/2.0/insert")).count(),
+        1,
+        "{reqs:?}"
+    );
+    assert_eq!(
+        reqs.iter().filter(|(_, p, _)| p.contains("Peserta/nik/")).count(),
+        1,
+        "{reqs:?}"
+    );
+    // Tetap 1 baris SEP, 1 job outbox.
+    let (s, v, _) = call(app, req("GET", "/api/seps", Some(&token), None)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v.as_array().map(|a| a.len()), Some(9));
+}
+
+#[tokio::test]
+async fn sep_create_live_insert_failure_then_worker_acks() {
+    // Jalur gagal (FASE2.md §9): insert live gagal -> baris Gagal +
+    // job Pending; worker retry mengirim insert SEKALI dan ack,
+    // sync-back menulis nomor BPJS + status Aktif ke baris SEP.
+    let (stub, addr) = spawn_bpjs_stub().await;
+    stub.set_fail_once_paths(&["SEP/2.0/insert"]);
+    let config = bpjs_stub_config(addr);
+    let (app, db) = seeded_app_with_config(config.clone()).await;
+    let token = login_as(&app, "ahmad").await;
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/seps",
+            Some(&token),
+            Some(json!({
+                "patient_id": "RM-000821",
+                "encounter_id": "ENC-2026-11-19-020",
+                "bpjs_number": "0001234567898",
+                "jenis": "RawatJalan",
+                "poli": "Poli Umum",
+            })),
+        ),
+    )
+    .await;
+    // Klien tetap menerima error (insert live gagal), tapi baris Gagal
+    // + job Pending sudah tersimpan untuk pemulihan worker.
+    assert_eq!(s, StatusCode::BAD_GATEWAY, "{v}");
+    let (s, v, _) = call(
+        app.clone(),
+        req("GET", "/api/seps/SEP-20261119-009", Some(&token), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "gagal");
+    assert_eq!(v["bpjs_sep_number"], Value::Null);
+    // Tagihan encounter sudah tertaut sejak baris Gagal dibuat, supaya
+    // setelah worker memulihkan SEP-nya tagihan tidak tetap null.
+    assert_eq!(v["invoice"]["id"], "INV-2026-1186");
+    let jobs = outbox_jobs(&app, &token, "?destination=vclaim&limit=100").await;
+    let jobs = jobs.as_array().expect("array outbox").clone();
+    assert_eq!(jobs.len(), 1, "{jobs:?}");
+    assert_eq!(jobs[0]["status"], "pending");
+
+    // Worker satu pass: insert kedua (satu-satunya yang sukses) -> ack.
+    let registry = build_registry(&config);
+    worker::run_once(&db, &registry, &config, worker_now()).await;
+    let jobs = outbox_jobs(&app, &token, "?destination=vclaim&limit=100").await;
+    let jobs = jobs.as_array().expect("array outbox").clone();
+    assert_eq!(jobs[0]["status"], "acked");
+    assert_eq!(jobs[0]["external_id"], "SEP-CONTOH-001");
+    // Total insert ke stub: 1 gagal + 1 sukses = 2 (bukan 3: POST ulang
+    // tidak ada, worker tidak mengirim dua kali).
+    assert_eq!(
+        stub.requests()
+            .iter()
+            .filter(|(_, p, _)| p.contains("SEP/2.0/insert"))
+            .count(),
+        2,
+        "{:?}",
+        stub.requests()
+    );
+    // Sync-back: baris SEP kini Aktif + bernomor BPJS.
+    let (s, v, _) = call(
+        app.clone(),
+        req("GET", "/api/seps/SEP-20261119-009", Some(&token), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "aktif");
+    assert_eq!(v["bpjs_sep_number"], "SEP-CONTOH-001");
+}
+
+#[tokio::test]
+async fn sep_retry_after_failure_reuses_gagal_row_and_marks_pending_acked() {
+    // POST ulang setelah gagal: memakai ulang baris Gagal yang sama
+    // (bukan baris baru), insert live sukses, dan job Pending dari
+    // percobaan pertama ditandai Acked — bukan dibiarkan untuk dikirim
+    // worker (itu akan jadi insert kedua).
+    let (stub, addr) = spawn_bpjs_stub().await;
+    stub.set_fail_once_paths(&["SEP/2.0/insert"]);
+    let config = bpjs_stub_config(addr);
+    let (app, db) = seeded_app_with_config(config.clone()).await;
+    let token = login_as(&app, "ahmad").await;
+    let body = json!({
+        "patient_id": "RM-000821",
+        "encounter_id": "ENC-2026-11-19-020",
+        "bpjs_number": "0001234567898",
+        "jenis": "RawatJalan",
+        "poli": "Poli Umum",
+    });
+    let (s, _, _) = call(app.clone(), req("POST", "/api/seps", Some(&token), Some(body.clone()))).await;
+    assert_eq!(s, StatusCode::BAD_GATEWAY);
+    // POST ulang: sukses, baris yang sama.
+    let (s, v, _) = call(app.clone(), req("POST", "/api/seps", Some(&token), Some(body))).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["id"], "SEP-20261119-009");
+    assert_eq!(v["status"], "aktif");
+    assert_eq!(v["bpjs_sep_number"], "SEP-CONTOH-001");
+    // Satu job, sudah Acked (bukan Pending baru).
+    let jobs = outbox_jobs(&app, &token, "?destination=vclaim&limit=100").await;
+    let jobs = jobs.as_array().expect("array outbox").clone();
+    assert_eq!(jobs.len(), 1, "{jobs:?}");
+    assert_eq!(jobs[0]["status"], "acked");
+    assert_eq!(jobs[0]["external_id"], "SEP-CONTOH-001");
+    // Worker satu pass: tidak ada insert lagi.
+    let registry = build_registry(&config);
+    worker::run_once(&db, &registry, &config, worker_now()).await;
+    assert_eq!(
+        stub.requests()
+            .iter()
+            .filter(|(_, p, _)| p.contains("SEP/2.0/insert"))
+            .count(),
+        2,
+        "1 gagal + 1 sukses, tanpa kiriman worker: {:?}",
+        stub.requests()
+    );
 }
 
 #[tokio::test]
 async fn sep_create_unknown_nik_is_422() {
+    // Tanpa encounter + poli Gigi: tidak ada seed SEP untuk kunci ini
+    // (seed SEP-001 milik RM-000812 adalah encounter 014 / Poli Umum),
+    // jadi alur sampai ke cek eligibilitas dan gagal 422 di sana.
     let (stub, addr) = spawn_bpjs_stub().await;
     stub.set_envelope_override("404", "NIK tidak ditemukan");
     let config = bpjs_stub_config(addr);
@@ -1394,10 +1597,9 @@ async fn sep_create_unknown_nik_is_422() {
             Some(&token),
             Some(json!({
                 "patient_id": "RM-000812",
-                "encounter_id": "ENC-2026-11-19-014",
                 "bpjs_number": "0001234567890",
                 "jenis": "RawatJalan",
-                "poli": "Poli Umum",
+                "poli": "Gigi",
             })),
         ),
     )

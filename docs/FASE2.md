@@ -58,10 +58,12 @@ CREATE TABLE outbox (
 );
 CREATE INDEX idx_outbox_due ON outbox(status, next_retry_at, created_at);
 
--- SEP VClaim (satu baris per SEP; nomor SEP = id).
+-- SEP VClaim (satu baris per SEP; nomor SEP lokal = id; nomor yang
+-- dikenal BPJS = bpjs_sep_number, migrasi 0003).
 CREATE TABLE seps (
   id TEXT PRIMARY KEY,                    -- SEP-20261119-001
   sep_number TEXT NOT NULL UNIQUE,
+  bpjs_sep_number TEXT,                   -- nomor SEP terbitan BPJS (otoritatif)
   patient_id TEXT NOT NULL,
   encounter_id TEXT,
   bpjs_number TEXT NOT NULL,
@@ -420,7 +422,7 @@ Endpoint yang hanya membaca DB lokal tetap jalan.
 | `POST /api/outbox/{id}/retry` | Admin | — | status -> Pending, attempts=0, next_retry_at=NULL |
 | `POST /api/outbox/{id}/cancel` | Admin | — | status -> Dead (keputusan operator) |
 | `GET /api/seps?date=` | login | default WARAS_TODAY | daftar SEP hari itu |
-| `POST /api/seps` | Dokter/Perawat/Admin | `{patient_id, encounter_id?, bpjs_number, jenis, poli}` | 503 bila BPJS belum dikonfigurasi; bila terkonfigurasi: cek eligibilitas via VClaim dulu (NIK tidak ditemukan -> 422), lalu insert SEP via adapter (stub di test), simpan + enqueue, `201` + SEP |
+| `POST /api/seps` | Dokter/Perawat/Admin | `{patient_id, encounter_id?, bpjs_number, jenis, poli}` | 503 bila BPJS belum dikonfigurasi; bila terkonfigurasi: pre-check lokal (SEP Aktif untuk kunci yang sama -> 200 tanpa memanggil BPJS; baris Gagal dipakai ulang), cek eligibilitas via VClaim (NIK tidak ditemukan -> 422), insert SEP live SEKALI via adapter, nomor BPJS ditulis ke `seps.bpjs_sep_number`, job outbox langsung Acked (bukan Pending), `201` + SEP; bila insert live gagal -> baris Gagal + job Pending (worker retry memulihkan), klien menerima error bridge |
 | `GET /api/seps/{id}` | login | — | SEP + invoice terkait (bila ada) |
 | `POST /api/seps/{id}/cancel` | Dokter/Admin | — | batal via VClaim (atau 503 bila belum dikonfigurasi) |
 | `GET /api/bpjs/peserta?nik=&tanggal=` | login | — | hasil cek eligibilitas VClaim (atau 503) |
@@ -556,21 +558,30 @@ cukup tulis di README.
   `waras-core::types::Invoice` + `InvoiceRow`, seed menautkan
   `invoices.sep_id` lewat encounter, `GET /api/seps/{id}` dan
   `POST /api/claims` memakai tautan langsung.
-- **SEP bisa terkirim dua kali ke BPJS** (batasan, lihat README):
-  nomor SEP lokal dibuat dulu, lalu worker mengirim ulang insert yang
-  sama karena adapter tidak punya lookup idempotensi. Perbaiki sebelum
-  live (cek "SEP sudah ada?" di adapter VClaim).
-- **Tanda tangan `mark_outbox_sent` (agen A):**
-  `(id, status, external_id, attempts, next_retry_at, last_error)` —
-  bukan `(id, outcome: &SendOutcome, …)` seperti draf kontrak, karena
-  `waras-db` tidak boleh bergantung ke `waras-bridge`. Worker memetakan
-  `SendOutcome` ke dua parameter itu.
-  `invoices.sep_id` lewat encounter, `GET /api/seps/{id}` dan
-  `POST /api/claims` memakai tautan langsung.
-- **SEP bisa terkirim dua kali ke BPJS** (batasan, lihat README):
-  nomor SEP lokal dibuat dulu, lalu worker mengirim ulang insert yang
-  sama karena adapter tidak punya lookup idempotensi. Perbaiki sebelum
-  live (cek "SEP sudah ada?" di adapter VClaim).
+- **SEP double-submit — DIPERBAIKI (20 Nov 2026).** Dulu: `POST /api/seps`
+  memanggil insert VClaim live DAN meng-enqueue job outbox untuk insert
+  yang sama, jadi worker mengirim ulang insert itu (2 POST identik di
+  log stub). Sekarang tiga lapis:
+  1. Handler `create_sep` single-send: pre-check lokal `find_sep_for_key`
+     (SEP Aktif untuk kunci yang sama dikembalikan 200 tanpa memanggil
+     BPJS; baris Gagal dipakai ulang untuk percobaan insert berikutnya),
+     insert live SEKALI, nomor SEP BPJS langsung ditulis ke
+     `seps.bpjs_sep_number`, job outbox dicatat langsung Acked via
+     `record_outbox_acked` (bukan Pending). Bila insert live gagal:
+     baris Gagal + job Pending, worker retry tetap jadi jalur pemulihan;
+     sync-back worker menulis nomor + status Aktif ke baris SEP.
+     Tautan invoice dibuat sejak baris dibuat (Gagal sekalipun).
+  2. Guard adapter VClaim: sebelum insert, `GET SEP/{noSep}` (lookup
+     `cari()` yang terdokumentasi) — bila SEP sudah ada, kembalikan
+     nomornya sebagai Acked tanpa insert; 404 lanjut insert; error lain
+     gagal tanpa insert (worker retry).
+  3. Kunci idempotensi outbox `vclaim:SEP:{sep_no}:created` tetap ada.
+  Nomor otoritatif yang dikenal BPJS adalah `seps.bpjs_sep_number`
+  (= `outbox.external_id`); `sep_number` lokal hanya kunci internal.
+  `cancel_sep` mengirim `bpjs_sep_number` bila ada. Terverifikasi
+  melawan stub lokal: create sukses + worker pass = 1 insert POST;
+  retry job Acked = 0 insert tambahan (1 lookup GET); insert live
+  gagal lalu worker = 2 insert (1 gagal + 1 sukses).
 - **Tanda tangan `mark_outbox_sent` (agen A):**
   `(id, status, external_id, attempts, next_retry_at, last_error)` —
   bukan `(id, outcome: &SendOutcome, …)` seperti draf kontrak, karena
@@ -613,6 +624,7 @@ di bawah masuk commit verifikasi di branch `fase-2-jembatan`.
 | BPJS dekripsi: plaintext masih LZString | MISMATCH → DIPERBAIKI | `waras-bridge/src/lzstring.rs` (port `lz-string` 1.5.0, `decompressFromEncodedURIComponent`); `decrypt_response` coba JSON mentah dulu, lalu LZString; vektor uji dari paket `lz-string` asli |
 | VClaim SEP insert: body datar, tanpa envelope | MISMATCH → DIPERBAIKI | adapter membungkus `{"request": {"t_sep": <payload>}}`; sama untuk SEP Batal (`t_sep`) dan Rujukan (`t_rujukan`); payload internal tetap datar |
 | VClaim SEP insert path `SEP/2.0/insert` | COCOK | — |
+| VClaim SEP lookup `GET SEP/{noSep}` (dipakai guard anti-double-submit sebelum insert) | COCOK (sumber sekunder) | DeepWiki `ssecd/jkn` SEP Management: `cari()` = `GET /SEP/:nomor`, `cariByRujukan()` = `GET /Rujukan/lastsep/norujukan/:nomorRujukan`; SDK itu sudah diuji terhadap API VClaim asli. BELUM dikonfirmasi lewat portal resmi BPJS (ada di balik login) — konfirmasi saat uji sandbox live dengan kredensial asli. Guard memperlakukan 404 sebagai "belum ada" dan error lain sebagai gagal-tanpa-insert, jadi endpoint yang salah pun tidak menyebabkan insert ganda diam-diam |
 | VClaim SEP: banyak field wajib 2.0 belum dikirim (ppkPelayanan, klsRawat, rujukan, diagAwal, poli sebagai objek, tujuanKunj, dpjpLayan, user, noTelp) | GAP — butuh config faskes + field form | — |
 | VClaim SEP delete path `SEP/delete` | BELUM TERKONFIRMASI | — |
 | VClaim Rujukan insert path `Rujukan/insert` | BELUM TERKONFIRMASI | — |
@@ -677,5 +689,3 @@ di bawah masuk commit verifikasi di branch `fase-2-jembatan`.
   PCare dev (kunjungan + field), Antrean dev (add/batal + field
   lengkap), Aplicares (`bed/read` + `ref/kelas`), dan dekripsi
   LZString terhadap respons enkripsi asli.
-- **SEP double-submit tetap terbuka** (lihat §9 + README): perbaikan
-  terpisah, masih wajib sebelum live.

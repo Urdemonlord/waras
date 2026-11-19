@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use waras_bridge::{BridgeError, SendOutcome};
 use waras_core::{
-    bridge::{BridgeHealth, OutboxDestination, OutboxJob},
+    bridge::{BridgeHealth, OutboxDestination, OutboxJob, OutboxStatus},
     rbac::Action,
     types::{
         BedAvailability, Claim, ClaimStatus, OnlineBooking, PcareVisit, Referral,
@@ -412,6 +412,25 @@ pub async fn create_sep(
         return Ok(not_configured("VClaim"));
     }
     let today = clinic_today().to_string();
+    // 0) Idempotensi lokal (FASE2.md §9): SEP Aktif untuk kunci yang sama
+    //    sudah ada -> kembalikan tanpa memanggil BPJS lagi. Baris Gagal
+    //    dipakai ulang di bawah: insert live dicoba lagi pada baris yang
+    //    sama, bukan baris baru.
+    let existing = state
+        .db
+        .find_sep_for_key(
+            &body.patient_id,
+            encounter_id.as_deref(),
+            &today,
+            &body.poli,
+            &body.jenis,
+        )
+        .await?;
+    if let Some(existing) = &existing {
+        if existing.status == SepStatus::Aktif {
+            return Ok((StatusCode::OK, Json(json!(existing))));
+        }
+    }
     // 1) Cek eligibilitas via VClaim dulu (NIK tidak ditemukan -> 422).
     let eligibility = live_send(
         &state,
@@ -427,9 +446,10 @@ pub async fn create_sep(
             other => bridge_error(&other),
         });
     }
-    // 2) Insert SEP via adapter. Nomor SEP lokal tetap mengikuti pola
-    // repo (SEP-YYYYMMDD-### via `create_sep`); nomor yang dikembalikan
-    // BPJS tersimpan sebagai external_id di outbox saat worker ack.
+    // 2) Insert SEP via adapter — SATU-SATUNYA pengiriman live. Hasilnya
+    //    (nomor SEP BPJS) disimpan ke baris SEP, dan job outbox dicatat
+    //    langsung sebagai Acked, supaya worker tidak pernah mengirim ulang
+    //    insert yang sudah terjadi (FASE2.md §9).
     let insert_body = json!({
         "noKartu": body.bpjs_number,
         "tglSep": today,
@@ -439,36 +459,116 @@ pub async fn create_sep(
         "nik": patient.nik,
         "nama": patient.name,
     });
-    if let Err(e) = live_send(
+    let live = live_send(
         &state,
         OutboxDestination::VClaim,
         "SEP",
         insert_body.clone(),
     )
-    .await
-    {
-        return Ok(match e {
-            BridgeError::Validation(msg) => unprocessable(&msg),
-            BridgeError::NotConfigured(_) => not_configured("VClaim"),
-            other => bridge_error(&other),
-        });
-    }
-    // 3) Simpan + tautkan ke tagihan encounter (bila ada) + enqueue.
-    let sep = state
-        .db
-        .create_sep(&Sep {
-            id: String::new(),
-            sep_number: String::new(),
-            patient_id: patient.id.clone(),
-            encounter_id: encounter_id.clone(),
-            bpjs_number: body.bpjs_number,
-            jenis: body.jenis,
-            poli: body.poli,
-            status: SepStatus::Aktif,
-            created_by: user.name.clone(),
-            created_at: now_clinic(),
-        })
-        .await?;
+    .await;
+    let bpjs_no = match live {
+        Ok(outcome) => outcome.external_id,
+        Err(e) => {
+            // Insert live gagal: simpan baris Gagal (atau pakai ulang
+            // baris Gagal yang sudah ada) + enqueue pending supaya worker
+            // retry jadi jalur pemulihan; klien tetap menerima error
+            // seperti dulu. Tautan ke tagihan encounter dibuat sejak
+            // sekarang juga, supaya setelah worker memulihkan SEP-nya
+            // (sync-back) tagihan sudah tertaut, bukan tetap null.
+            let sep = match &existing {
+                Some(row) => row.clone(),
+                None => {
+                    state
+                        .db
+                        .create_sep(&Sep {
+                            id: String::new(),
+                            sep_number: String::new(),
+                            bpjs_sep_number: None,
+                            patient_id: patient.id.clone(),
+                            encounter_id: encounter_id.clone(),
+                            bpjs_number: body.bpjs_number,
+                            jenis: body.jenis,
+                            poli: body.poli,
+                            status: SepStatus::Gagal,
+                            created_by: user.name.clone(),
+                            created_at: now_clinic(),
+                        })
+                        .await?
+                }
+            };
+            if let Some(enc_id) = &encounter_id {
+                if let Ok(invoices) = state.db.list_invoices(None).await {
+                    if let Some(inv) = invoices.iter().find(|i| i.encounter_id.as_deref() == Some(enc_id.as_str())) {
+                        if let Err(e) = state.db.link_invoice_sep(&inv.id, &sep.id).await {
+                            tracing::warn!("gagal menautkan SEP {} ke {}: {e}", sep.id, inv.id);
+                        }
+                    }
+                }
+            }
+            try_enqueue(
+                &state.db,
+                &new_outbox_job(
+                    OutboxDestination::VClaim,
+                    "SEP",
+                    &sep.id,
+                    &format!("vclaim:SEP:{}:created", sep.sep_number),
+                    insert_body,
+                    state.bridge_config.outbox_max_attempts,
+                ),
+            )
+            .await;
+            audit(
+                &state.db,
+                &user.name,
+                "sep.created",
+                "sep",
+                &sep.id,
+                json!({"patient_id": sep.patient_id, "jenis": sep.jenis, "poli": sep.poli, "status": "gagal"}),
+            )
+            .await;
+            return Ok(match e {
+                BridgeError::Validation(msg) => unprocessable(&msg),
+                BridgeError::NotConfigured(_) => not_configured("VClaim"),
+                other => bridge_error(&other),
+            });
+        }
+    };
+    // 3) Simpan (baru, atau perbarui baris Gagal) + tautkan ke tagihan
+    //    encounter (bila ada) + catat outbox sebagai sudah-Acked.
+    let sep = match &existing {
+        Some(row) => {
+            if let Some(no) = &bpjs_no {
+                state.db.set_sep_bpjs_number(&row.id, no).await?;
+            }
+            state
+                .db
+                .set_sep_status(&row.id, SepStatus::Aktif)
+                .await?;
+            state
+                .db
+                .get_sep(&row.id)
+                .await?
+                .ok_or_else(|| ApiError::not_found(format!("SEP {} tidak ditemukan", row.id)))?
+        }
+        None => {
+            state
+                .db
+                .create_sep(&Sep {
+                    id: String::new(),
+                    sep_number: String::new(),
+                    bpjs_sep_number: bpjs_no.clone(),
+                    patient_id: patient.id.clone(),
+                    encounter_id: encounter_id.clone(),
+                    bpjs_number: body.bpjs_number,
+                    jenis: body.jenis,
+                    poli: body.poli,
+                    status: SepStatus::Aktif,
+                    created_by: user.name.clone(),
+                    created_at: now_clinic(),
+                })
+                .await?
+        }
+    };
     if let Some(enc_id) = &encounter_id {
         if let Ok(invoices) = state.db.list_invoices(None).await {
             if let Some(inv) = invoices.iter().find(|i| i.encounter_id.as_deref() == Some(enc_id.as_str())) {
@@ -484,21 +584,28 @@ pub async fn create_sep(
         "sep.created",
         "sep",
         &sep.id,
-        json!({"patient_id": sep.patient_id, "jenis": sep.jenis, "poli": sep.poli}),
+        json!({"patient_id": sep.patient_id, "jenis": sep.jenis, "poli": sep.poli, "bpjs_sep_number": bpjs_no}),
     )
     .await;
-    try_enqueue(
-        &state.db,
-        &new_outbox_job(
-            OutboxDestination::VClaim,
-            "SEP",
-            &sep.id,
-            &format!("vclaim:SEP:{}:created", sep.sep_number),
-            insert_body,
-            state.bridge_config.outbox_max_attempts,
-        ),
-    )
-    .await;
+    // Job outbox dicatat langsung Acked (bukan Pending): insert sudah
+    // terjadi lewat panggilan live di atas. `record_outbox_acked`
+    // menandai juga baris Pending/Failed berkunci sama (bila ada dari
+    // percobaan gagal sebelumnya) supaya worker tidak mengirimnya lagi.
+    // `external_id` = nomor SEP BPJS, sama dengan `sep.bpjs_sep_number`.
+    let mut job = new_outbox_job(
+        OutboxDestination::VClaim,
+        "SEP",
+        &sep.id,
+        &format!("vclaim:SEP:{}:created", sep.sep_number),
+        insert_body,
+        state.bridge_config.outbox_max_attempts,
+    );
+    job.status = OutboxStatus::Acked;
+    job.attempts = 1;
+    job.external_id = bpjs_no;
+    if let Err(e) = state.db.record_outbox_acked(&job).await {
+        tracing::warn!("gagal mencatat outbox Acked SEP {}: {e}", sep.id);
+    }
     Ok((StatusCode::CREATED, Json(json!(sep))))
 }
 
@@ -548,12 +655,14 @@ pub async fn cancel_sep(
     }
     // Batal via VClaim dulu; hanya bila berhasil, ubah status lokal.
     // (Tidak di-enqueue: worker yang mengirim ulang "SEP Batal" akan
-    // menghapus SEP yang sudah dibatalkan.)
+    // menghapus SEP yang sudah dibatalkan.) `noSep` yang dikirim adalah
+    // nomor SEP BPJS bila ada (itu nomor yang dikenal BPJS), bukan nomor
+    // lokal (FASE2.md §9).
     if let Err(e) = live_send(
         &state,
         OutboxDestination::VClaim,
         "SEP Batal",
-        json!({"noSep": sep.sep_number}),
+        json!({"noSep": sep.bpjs_sep_number.as_deref().unwrap_or(&sep.sep_number)}),
     )
     .await
     {

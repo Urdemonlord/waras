@@ -7,7 +7,10 @@
 //! **Status verifikasi per layanan (2026-11-20, melawan dokumen bridging
 //! resmi — lihat docs/FASE2.md §9):** tanda tangan + dekripsi AES-256-CBC
 //! + LZString terverifikasi; path VClaim `SEP/2.0/insert` + envelope
-//! `{"request": {"t_sep": ...}}` terverifikasi; path Aplicares
+//! `{"request": {"t_sep": ...}}` terverifikasi; lookup SEP `GET SEP/{noSep}`
+//! (VClaim `cari()`, DeepWiki ssecd/jkn SEP Management) dipakai guard
+//! idempotensi insert SEP — bila nomor SEP sudah dikenal, lookup dulu,
+//! insert hanya bila belum ada. Path Aplicares
 //! `rest/bed/read/{kodeppk}/{start}/{limit}` di host
 //! `new-api.bpjs-kesehatan.go.id` terverifikasi. Path `SEP/delete`,
 //! `Rujukan/insert`, dan seluruh PCare/Antrean masih pola umum yang
@@ -351,6 +354,47 @@ impl Bridge for BpjsBridge {
         // saat kredensial live tersedia (lihat docs modul).
         match (self.destination, job.resource_type.as_str()) {
             (OutboxDestination::VClaim, "SEP") => {
+                // Guard idempotensi (FASE2.md §9): bila job sudah membawa
+                // nomor SEP BPJS — dari `external_id` (ack sebelumnya,
+                // mis. job di-retry operator) atau `noSep` di payload —
+                // cek dulu ke BPJS lewat lookup terdokumentasi
+                // `GET SEP/{noSep}` (VClaim `cari()`, ssecd/jkn SEP
+                // Management). Bila SEP sudah ada, anggap terkirim tanpa
+                // insert ulang. Bila lookup bilang tidak ada (404 /
+                // Validation "tidak ditemukan"), lanjut insert. Error lain
+                // dari lookup (HTTP/Rejected/Auth) digagalkan supaya job
+                // retry — jangan insert buta.
+                let known_no_sep = job
+                    .external_id
+                    .clone()
+                    .filter(|s| !s.trim().is_empty())
+                    .or_else(|| {
+                        job.payload["noSep"]
+                            .as_str()
+                            .or_else(|| job.payload["sep"]["noSep"].as_str())
+                            .map(|s| s.to_string())
+                    });
+                if let Some(no_sep) = known_no_sep {
+                    match self
+                        .call(Method::GET, &format!("SEP/{no_sep}"), None)
+                        .await
+                    {
+                        Ok(_) => {
+                            return Ok(SendOutcome {
+                                external_id: Some(no_sep),
+                                status: OutboxStatus::Acked,
+                                note: Some("SEP sudah ada di BPJS (lookup)".into()),
+                            });
+                        }
+                        Err(BridgeError::Validation(_)) => {
+                            // Tidak ditemukan di BPJS -> lanjut insert.
+                        }
+                        Err(BridgeError::Rejected { status: 404, .. }) => {
+                            // Tidak ditemukan (bentuk HTTP polos) -> lanjut.
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
                 let body = vclaim_envelope("t_sep", &job.payload);
                 let resp = self
                     .call(Method::POST, "SEP/2.0/insert", Some(&body))
@@ -587,12 +631,31 @@ mod tests {
         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, ct)
     }
 
+    /// Nomor SEP pada path lookup `.../SEP/{noSep}` (VClaim `cari()`),
+    /// bukan insert (`SEP/2.0/...`) atau delete (`SEP/delete`).
+    fn sep_lookup_number(path: &str) -> Option<&str> {
+        let rest = path.split("/SEP/").nth(1)?;
+        let no = rest.split('/').next().unwrap_or("");
+        if no.is_empty() || no == "2.0" || no.eq_ignore_ascii_case("delete") {
+            None
+        } else {
+            Some(no)
+        }
+    }
+
     /// Respons kaleng per path (bentuk `response` envelope BPJS).
     fn canned_response(path: &str, body: &Value) -> Value {
         if path.contains("SEP/2.0/insert") {
             json!({"sep": {"noSep": "SEP-CONTOH-001"}})
         } else if path.contains("SEP/delete") {
             json!({"noSep": body["request"]["t_sep"]["noSep"].as_str().unwrap_or("SEP-CONTOH-001")})
+        } else if let Some(no) = sep_lookup_number(path) {
+            // Lookup SEP by number: hanya SEP-CONTOH-001 yang "ada".
+            if no == "SEP-CONTOH-001" {
+                json!({"sep": {"noSep": "SEP-CONTOH-001"}})
+            } else {
+                json!({})
+            }
         } else if path.contains("Peserta/nik/") {
             json!({"peserta": {"noKartu": "0001234567890", "nama": "Siti Rahmawati"}})
         } else if path.contains("Rujukan/insert") {
@@ -648,6 +711,14 @@ mod tests {
             .envelope_override
             .clone()
             .unwrap_or_else(|| ("200".to_string(), "OK".to_string()));
+        // Lookup SEP yang nomornya tidak dikenal -> 404 "tidak ditemukan"
+        // (bentuk yang dikembalikan `call` sebagai Validation).
+        let (code, message) = match sep_lookup_number(&path) {
+            Some(no) if no != "SEP-CONTOH-001" => {
+                ("404".to_string(), "SEP tidak ditemukan".to_string())
+            }
+            _ => (code, message),
+        };
         let response = canned_response(&path, &body_json);
         let response = if inner.encrypt_responses {
             let ts: u64 = headers
@@ -781,6 +852,74 @@ mod tests {
             envelope_response(&server).unwrap_err(),
             BridgeError::Http(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn sep_insert_lookup_hit_skips_insert() {
+        // Guard idempotensi (FASE2.md §9): job sudah membawa nomor SEP
+        // BPJS (external_id dari ack sebelumnya) -> lookup dulu, bila ada
+        // di BPJS, insert TIDAK dikirim sama sekali.
+        let (state, config) = spawn_stub().await;
+        let b = bridge(OutboxDestination::VClaim, &config);
+        let mut j = job(
+            OutboxDestination::VClaim,
+            "SEP",
+            json!({"noKartu": "0001234567890", "tglSep": "2026-11-19"}),
+        );
+        j.external_id = Some("SEP-CONTOH-001".to_string());
+        let out = b.send(&j).await.unwrap();
+        assert_eq!(out.status, OutboxStatus::Acked);
+        assert_eq!(out.external_id.as_deref(), Some("SEP-CONTOH-001"));
+        assert!(out.note.as_deref().unwrap_or("").contains("sudah ada"));
+        let reqs = state.requests();
+        assert_eq!(reqs.len(), 1, "{reqs:?}");
+        assert_eq!(reqs[0].method, "GET");
+        assert!(reqs[0].path.contains("SEP/SEP-CONTOH-001"), "path: {}", reqs[0].path);
+    }
+
+    #[tokio::test]
+    async fn sep_insert_lookup_miss_falls_through_to_insert() {
+        // Nomor dikenal job tapi TIDAK ada di BPJS (lookup 404) -> insert
+        // jalan sekali seperti biasa.
+        let (state, config) = spawn_stub().await;
+        let b = bridge(OutboxDestination::VClaim, &config);
+        let mut j = job(
+            OutboxDestination::VClaim,
+            "SEP",
+            json!({"noKartu": "0001234567890", "tglSep": "2026-11-19"}),
+        );
+        j.external_id = Some("SEP-TIDAK-ADA".to_string());
+        let out = b.send(&j).await.unwrap();
+        assert_eq!(out.status, OutboxStatus::Acked);
+        assert_eq!(out.external_id.as_deref(), Some("SEP-CONTOH-001"));
+        let reqs = state.requests();
+        assert_eq!(reqs.len(), 2, "{reqs:?}");
+        assert!(reqs[0].path.contains("SEP/SEP-TIDAK-ADA"), "path: {}", reqs[0].path);
+        assert!(reqs[1].path.contains("SEP/2.0/insert"), "path: {}", reqs[1].path);
+    }
+
+    #[tokio::test]
+    async fn sep_insert_lookup_error_fails_without_insert() {
+        // Lookup gagal transient (HTTP 500) -> job gagal TANPA insert
+        // buta; worker akan retry dan lookup diulang.
+        let (state, config) = spawn_stub().await;
+        {
+            let mut inner = state.inner.lock().unwrap();
+            inner.http_fail_status = Some(500);
+            inner.fail_times = 1;
+        }
+        let b = bridge(OutboxDestination::VClaim, &config);
+        let mut j = job(
+            OutboxDestination::VClaim,
+            "SEP",
+            json!({"noKartu": "0001234567890", "tglSep": "2026-11-19"}),
+        );
+        j.external_id = Some("SEP-CONTOH-001".to_string());
+        let err = b.send(&j).await.unwrap_err();
+        assert!(matches!(err, BridgeError::Http(_)), "dapat {err:?}");
+        let reqs = state.requests();
+        assert_eq!(reqs.len(), 1, "{reqs:?}");
+        assert!(reqs[0].path.contains("SEP/SEP-CONTOH-001"), "path: {}", reqs[0].path);
     }
 
     #[tokio::test]

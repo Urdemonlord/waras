@@ -45,7 +45,9 @@
       document.getElementById('kpi-failed-sub').textContent =
         failed > 0 ? 'Perlu verifikasi peserta' : 'Semua SEP aktif';
       tbody.innerHTML = list.map(function (s) {
-        return '<tr><td>' + Waras.esc(s.sep_number || s.id) + '</td>' +
+        // Nomor SEP BPJS (bila sudah diterbitkan) yang otoritatif;
+        // nomor lokal hanya fallback (FASE2.md §9).
+        return '<tr><td>' + Waras.esc(s.bpjs_sep_number || s.sep_number || s.id) + '</td>' +
           '<td>' + Waras.esc(Waras.patientName(map, s.patient_id)) + '</td>' +
           '<td>' + Waras.esc(s.bpjs_number) + '</td>' +
           '<td>' + Waras.esc(jenisLabel(s.jenis)) + '</td>' +
@@ -159,7 +161,7 @@
             poli: document.getElementById('sep-poli').value
           }
         });
-        showFormOk('SEP ' + (sep.sep_number || sep.id || '') + ' berhasil diterbitkan.');
+        showFormOk('SEP ' + (sep.bpjs_sep_number || sep.sep_number || sep.id || '') + ' berhasil diterbitkan.');
         Waras.toast('SEP berhasil diterbitkan.');
         await loadSeps();
       } catch (e) {

@@ -58,6 +58,8 @@ pub(crate) fn referral_status_from_str(s: &str) -> Result<ReferralStatus, WarasE
 pub struct SepRow {
     pub id: String,
     pub sep_number: String,
+    /// Nomor SEP BPJS (`response.sep.noSep`); NULL bila belum terkirim.
+    pub bpjs_sep_number: Option<String>,
     pub patient_id: String,
     pub encounter_id: Option<String>,
     pub bpjs_number: String,
@@ -73,6 +75,7 @@ impl SepRow {
         Ok(Sep {
             id: self.id,
             sep_number: self.sep_number,
+            bpjs_sep_number: self.bpjs_sep_number,
             patient_id: self.patient_id,
             encounter_id: self.encounter_id,
             bpjs_number: self.bpjs_number,
@@ -194,12 +197,13 @@ impl Db {
             sep.sep_number.clone()
         };
         sqlx::query(
-            "INSERT INTO seps (id, sep_number, patient_id, encounter_id, bpjs_number,
+            "INSERT INTO seps (id, sep_number, bpjs_sep_number, patient_id, encounter_id, bpjs_number,
                  jenis, poli, status, created_by, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&sep_number)
+        .bind(&sep.bpjs_sep_number)
         .bind(&sep.patient_id)
         .bind(&sep.encounter_id)
         .bind(&sep.bpjs_number)
@@ -236,6 +240,65 @@ impl Db {
             .await
             .map_err(db_err)?;
         row.map(|r| r.into_domain()).transpose()
+    }
+
+    /// Cari SEP untuk kunci yang sama (dipakai idempotensi `POST
+    /// /api/seps`, FASE2.md §9): bila `encounter_id` ada, kunci =
+    /// (pasien, encounter); bila tidak, kunci = (pasien, tanggal, poli,
+    /// jenis) — BPJS sendiri menolak duplikasi SEP hari yang sama di poli
+    /// yang sama, jadi kunci ini aman. Mengembalikan baris terbaru
+    /// berstatus Aktif atau Gagal (Dibatalkan tidak dihitung: SEP yang
+    /// dibatalkan boleh diterbitkan ulang).
+    pub async fn find_sep_for_key(
+        &self,
+        patient_id: &str,
+        encounter_id: Option<&str>,
+        date: &str,
+        poli: &str,
+        jenis: &str,
+    ) -> Result<Option<Sep>, WarasError> {
+        let row: Option<SepRow> = if let Some(enc_id) = encounter_id {
+            sqlx::query_as(
+                "SELECT * FROM seps WHERE patient_id = ? AND encounter_id = ?
+                 AND status IN ('aktif', 'gagal') ORDER BY created_at DESC, id DESC LIMIT 1",
+            )
+            .bind(patient_id)
+            .bind(enc_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db_err)?
+        } else {
+            sqlx::query_as(
+                "SELECT * FROM seps WHERE patient_id = ? AND created_at LIKE ?
+                 AND poli = ? AND jenis = ? AND status IN ('aktif', 'gagal')
+                 ORDER BY created_at DESC, id DESC LIMIT 1",
+            )
+            .bind(patient_id)
+            .bind(format!("{date}%"))
+            .bind(poli)
+            .bind(jenis)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db_err)?
+        };
+        row.map(|r| r.into_domain()).transpose()
+    }
+
+    /// Tulis nomor SEP BPJS ke baris SEP (rekonsiliasi, FASE2.md §9):
+    /// dipakai handler saat insert live berhasil dan sync-back worker
+    /// saat job SEP ter-ack. Tidak mengubah status.
+    pub async fn set_sep_bpjs_number(&self, id: &str, bpjs_no: &str) -> Result<(), WarasError> {
+        let n = sqlx::query("UPDATE seps SET bpjs_sep_number = ? WHERE id = ?")
+            .bind(bpjs_no)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?
+            .rows_affected();
+        if n == 0 {
+            return Err(WarasError::NotFound(format!("SEP {id} tidak ditemukan")));
+        }
+        Ok(())
     }
 
     pub async fn set_sep_status(&self, id: &str, status: SepStatus) -> Result<(), WarasError> {
@@ -445,6 +508,7 @@ mod tests {
             .create_sep(&Sep {
                 id: String::new(),
                 sep_number: String::new(),
+                bpjs_sep_number: None,
                 patient_id: "RM-000813".into(),
                 encounter_id: None,
                 bpjs_number: "0001234567891".into(),
@@ -458,6 +522,7 @@ mod tests {
             .unwrap();
         assert_eq!(sep.id, "SEP-20261119-009");
         assert_eq!(sep.sep_number, "SEP-20261119-009");
+        assert_eq!(sep.bpjs_sep_number, None);
         assert_eq!(db.list_seps("2026-11-19").await.unwrap().len(), 9);
 
         db.set_sep_status(&sep.id, SepStatus::Dibatalkan).await.unwrap();
@@ -468,6 +533,48 @@ mod tests {
         assert!(db.get_sep("SEP-20261119-999").await.unwrap().is_none());
         assert!(matches!(
             db.set_sep_status("SEP-20261119-999", SepStatus::Aktif).await,
+            Err(WarasError::NotFound(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn bpjs_number_roundtrip_and_find_for_key() {
+        let db = seeded_db().await;
+        // find_sep_for_key: seed SEP-20261119-001 (Siti, ENC-2026-11-19-014,
+        // Poli Umum, RawatJalan) ditemukan lewat encounter maupun lewat
+        // kunci kunjungan (pasien + tanggal + poli + jenis).
+        let by_enc = db
+            .find_sep_for_key("RM-000812", Some("ENC-2026-11-19-014"), "2026-11-19", "Poli Umum", "RawatJalan")
+            .await
+            .unwrap()
+            .expect("SEP seed ditemukan lewat encounter");
+        assert_eq!(by_enc.id, "SEP-20261119-001");
+        assert_eq!(by_enc.bpjs_sep_number, None);
+        let by_visit = db
+            .find_sep_for_key("RM-000812", None, "2026-11-19", "Poli Umum", "RawatJalan")
+            .await
+            .unwrap()
+            .expect("SEP seed ditemukan lewat kunci kunjungan");
+        assert_eq!(by_visit.id, "SEP-20261119-001");
+        // Kunci lain tidak cocok: poli berbeda, encounter berbeda.
+        assert!(db
+            .find_sep_for_key("RM-000812", None, "2026-11-19", "Poli Gigi", "RawatJalan")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(db
+            .find_sep_for_key("RM-000812", Some("ENC-2026-11-19-999"), "2026-11-19", "Poli Umum", "RawatJalan")
+            .await
+            .unwrap()
+            .is_none());
+        // set_sep_bpjs_number: nomor BPJS tersimpan dan terbaca kembali.
+        db.set_sep_bpjs_number("SEP-20261119-001", "0301R0010126B000001")
+            .await
+            .unwrap();
+        let after = db.get_sep("SEP-20261119-001").await.unwrap().unwrap();
+        assert_eq!(after.bpjs_sep_number.as_deref(), Some("0301R0010126B000001"));
+        assert!(matches!(
+            db.set_sep_bpjs_number("SEP-20261119-999", "X").await,
             Err(WarasError::NotFound(_))
         ));
     }

@@ -327,6 +327,28 @@ impl Db {
                 }
             }
         }
+        // Sinkronisasi balik VClaim SEP (FASE2.md §9, perbaikan
+        // double-submit): bila job insert SEP ter-ack, nomor SEP BPJS
+        // (external_id) ditulis ke baris SEP sumber dan statusnya jadi
+        // Aktif — ini yang memperbaiki baris Gagal dari percobaan insert
+        // live yang gagal lalu berhasil lewat worker. Dead: jangan
+        // sentuh baris sumber (status Gagal sudah ditandai handler saat
+        // insert live gagal; baris Aktif tidak boleh turun jadi Gagal
+        // hanya karena satu job duplikat mati).
+        if job.destination == OutboxDestination::VClaim && job.resource_type == "SEP" {
+            if status == OutboxStatus::Acked {
+                if let Some(no_sep) = external_id {
+                    sqlx::query(
+                        "UPDATE seps SET bpjs_sep_number = ?, status = 'aktif' WHERE id = ?",
+                    )
+                    .bind(no_sep)
+                    .bind(&job.resource_id)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+                }
+            }
+        }
         tx.commit().await.map_err(db_err)?;
         Ok(())
     }
@@ -407,6 +429,37 @@ impl Db {
                 .await
                 .map_err(db_err)?;
         row.map(|r| r.into_domain()).transpose()
+    }
+
+    /// Catat pekerjaan yang SUDAH terkirim lewat panggilan live (bukan
+    /// worker) sebagai Acked (FASE2.md §9, perbaikan double-submit SEP):
+    /// bila sudah ada baris Pending/Failed dengan kunci idempotensi yang
+    /// sama (mis. percobaan insert live sebelumnya gagal lalu dicoba
+    /// lagi), tandai baris itu Acked; bila belum ada, sisipkan baris
+    /// baru berstatus Acked. `job` harus sudah berstatus Acked dengan
+    /// `external_id` terisi. Baris sumber TIDAK disentuh di sini —
+    /// pemanggil (handler) yang menulis nomor BPJS ke baris SEP;
+    /// sinkronisasi balik worker tetap di `mark_outbox_sent`.
+    pub async fn record_outbox_acked(&self, job: &OutboxJob) -> Result<(), WarasError> {
+        let n = sqlx::query(
+            "UPDATE outbox SET status = 'acked', external_id = ?, attempts = attempts + 1,
+                 next_retry_at = NULL, last_error = NULL, updated_at = ?
+             WHERE idempotency_key = ? AND status IN ('pending', 'failed')",
+        )
+        .bind(&job.external_id)
+        .bind(fmt_dt(now_naive()))
+        .bind(&job.idempotency_key)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?
+        .rows_affected();
+        if n == 0 {
+            // Belum ada baris dengan kunci ini: sisipkan sebagai Acked.
+            // INSERT OR IGNORE: bila baris muncul di tengah jalan (satu
+            // writer SQLite, praktis tidak terjadi), abaikan saja.
+            let _ = self.enqueue_outbox(job).await?;
+        }
+        Ok(())
     }
 
     /// Kembalikan pekerjaan ke Pending untuk dicoba lagi (retry operator):
