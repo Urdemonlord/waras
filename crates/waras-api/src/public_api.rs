@@ -336,7 +336,9 @@ mod tests {
     async fn public_app_on(path: &str) -> (Router, Arc<Db>, String, String, String) {
         let db = Db::connect(path).await.expect("buka DB");
         db.migrate().await.expect("migrasi");
-        assert!(db.seed_if_empty().await.expect("seed"), "seed harus jalan");
+        // Seed hanya jalan di DB kosong; boot 2 (tes restart, DB file
+        // sudah berisi) sengaja TIDAK menjalankan seed lagi.
+        db.seed_if_empty().await.expect("seed");
         let key = generate_api_key();
         let record = db
             .create_api_key(
