@@ -217,12 +217,14 @@ async fn auth_me_returns_user_from_token() {
 
 #[tokio::test]
 async fn health_is_public() {
-    let app = seeded_app().await;
+    // Mode mengikuti backend DB yang dipakai test ini (A2: di run
+    // Postgres nilainya "postgres", bukan "sqlite").
+    let (app, db) = seeded_app_with_config(disabled_config()).await;
     let (s, v, _) = call(app, req("GET", "/api/health", None, None)).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["status"], "ok");
     assert_eq!(v["version"], "0.1.0");
-    assert_eq!(v["mode"], "sqlite");
+    assert_eq!(v["mode"], db.mode());
     assert_eq!(v["today"], "2026-11-19");
 }
 
