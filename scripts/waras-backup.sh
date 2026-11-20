@@ -117,7 +117,7 @@ if ! verify "$TMP"; then
 fi
 
 # Ukuran + jumlah baris kunci sebagai bukti isi (bukan sekadar file ada).
-ROWS="$(sqlite3 "$TMP" "SELECT (SELECT COUNT(*) FROM patients) || '/' || (SELECT COUNT(*) FROM queue_entries) || '/' || (SELECT COUNT(*) FROM prescriptions);" 2>/dev/null || echo '?/?/?')"
+ROWS="$(sqlite3 "$TMP" "SELECT (SELECT COUNT(*) FROM patients) || '/' || (SELECT COUNT(*) FROM queue_entries) || '/' || (SELECT COUNT(*) FROM medication_requests);" 2>/dev/null || echo '?/?/?')"
 mv "$TMP" "$DEST" || die "tidak bisa memindah backup ke $DEST"
 sha256sum "$DEST" > "$DEST.sha256" || die "tidak bisa menulis $DEST.sha256"
 SIZE="$(du -h "$DEST" | cut -f1)"

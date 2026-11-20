@@ -36,7 +36,12 @@ DB="${2:-${WARAS_DB:-waras.db}}"
 
 [ -n "$BACKUP" ] || die "penggunaan: $PROG [--force] <BACKUP_FILE> [DB_PATH]"
 [ -f "$BACKUP" ] || die "file backup tidak ditemukan: $BACKUP"
-[ -f "$DB" ] || die "basis data aktif tidak ditemukan: $DB (restore butuh DB lama untuk salinan pra-restore; bila DB hilang total, salin saja backup ke $DB lalu verifikasi)"
+# DB aktif BOLEH tidak ada (kasus bencana: file DB hilang total). Bila
+# ada, salinan pra-restore dibuat di langkah 2; bila tidak ada, restore
+# tetap jalan dengan peringatan — backup yang terverifikasi adalah
+# satu-satunya sumber data.
+DB_EXISTS=0
+[ -f "$DB" ] && DB_EXISTS=1
 
 DB_DIR="$(dirname "$DB")"
 [ "$DB_DIR" = "." ] && DB_DIR="$PWD"
@@ -94,18 +99,22 @@ if [ -f "$BACKUP_ABS.sha256" ]; then
 else
     log "WARNING: tidak ada file .sha256 pendamping — lanjut hanya dengan integrity_check"
 fi
-ROWS="$(sqlite3 "$BACKUP_ABS" "SELECT (SELECT COUNT(*) FROM patients) || '/' || (SELECT COUNT(*) FROM queue_entries) || '/' || (SELECT COUNT(*) FROM prescriptions);" 2>/dev/null || echo '?/?/?')"
+ROWS="$(sqlite3 "$BACKUP_ABS" "SELECT (SELECT COUNT(*) FROM patients) || '/' || (SELECT COUNT(*) FROM queue_entries) || '/' || (SELECT COUNT(*) FROM medication_requests);" 2>/dev/null || echo '?/?/?')"
 log "backup terverifikasi OK (pasien/antrean/resep = $ROWS)"
 
-# --- 2. salinan pra-restore DB aktif -----------------------------------------
+# --- 2. salinan pra-restore DB aktif (bila masih ada) ------------------------
 STAMP="$(date '+%Y%m%d-%H%M%S')"
 PRESTORE="$DB_ABS.pre-restore-$STAMP"
-cp "$DB_ABS" "$PRESTORE" || die "tidak bisa membuat salinan pra-restore $PRESTORE"
-# Ikut salin -wal/-shm bila ada (mode journal default WARAS adalah
-# delete, jadi normalnya tidak ada — tapi jangan buang data diam-diam).
-[ -f "$DB_ABS-wal" ] && cp "$DB_ABS-wal" "$PRESTORE-wal"
-[ -f "$DB_ABS-shm" ] && cp "$DB_ABS-shm" "$PRESTORE-shm"
-log "salinan pra-restore disimpan: $PRESTORE"
+if [ "$DB_EXISTS" = 1 ]; then
+    cp "$DB_ABS" "$PRESTORE" || die "tidak bisa membuat salinan pra-restore $PRESTORE"
+    # Ikut salin -wal/-shm bila ada (mode journal default WARAS adalah
+    # delete, jadi normalnya tidak ada — tapi jangan buang data diam-diam).
+    [ -f "$DB_ABS-wal" ] && cp "$DB_ABS-wal" "$PRESTORE-wal"
+    [ -f "$DB_ABS-shm" ] && cp "$DB_ABS-shm" "$PRESTORE-shm"
+    log "salinan pra-restore disimpan: $PRESTORE"
+else
+    log "WARNING: DB aktif tidak ada — tidak ada salinan pra-restore; backup terverifikasi adalah satu-satunya sumber data"
+fi
 
 # --- 3. ganti DB lewat rename atomik -----------------------------------------
 TMP_RESTORE="$DB_ABS.restore-tmp.$$"
@@ -121,6 +130,6 @@ rm -f "$DB_ABS-wal" "$DB_ABS-shm"
 python3 -c 'import os,sys; os.fsync(os.open(sys.argv[1], os.O_RDONLY))' "$DB_DIR" 2>/dev/null || true
 
 log "restore OK: $DB_ABS <- $BACKUP_ABS (pasien/antrean/resep = $ROWS)"
-log "salinan DB sebelum restore: $PRESTORE (hapus manual bila restore sudah terverifikasi)"
+[ "$DB_EXISTS" = 1 ] && log "salinan DB sebelum restore: $PRESTORE (hapus manual bila restore sudah terverifikasi)"
 log "langkah berikut: nyalakan service (systemctl start waras), cek /api/health, lalu login dan cek KPI di dashboard"
 exit 0
