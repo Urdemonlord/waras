@@ -116,11 +116,12 @@ impl OutboxRow {
 impl Db {
     /// Enqueue idempotent: `INSERT OR IGNORE` atas `idempotency_key`.
     /// Kembalikan `true` bila baris baru dibuat, `false` bila kunci sudah
-    /// ada. Retry alokasi id OBX-###### (maks 5x) bila dua penulis
-    /// bersamaan menghitung id yang sama (A2, sama seperti `take_queue`;
-    /// pelanggaran PK atas id, bukan atas idempotency_key — yang terakhir
-    /// ditangani `ON CONFLICT DO NOTHING` / `INSERT OR IGNORE` dan
-    /// mengembalikan `false`, bukan error).
+    /// ada. `enqueue_outbox_once` memegang `Db::alloc_lock` selama
+    /// hitung id + INSERT; retry maks 5x di sini hanya jaring pengaman
+    /// untuk tabrakan antar proses. (Pelanggaran PK atas id, bukan atas
+    /// idempotency_key — yang terakhir ditangani `ON CONFLICT DO
+    /// NOTHING` / `INSERT OR IGNORE` dan mengembalikan `false`, bukan
+    /// error.)
     pub async fn enqueue_outbox(&self, job: &OutboxJob) -> Result<bool, WarasError> {
         let mut last_err: Option<WarasError> = None;
         for _ in 0..5 {
@@ -139,6 +140,8 @@ impl Db {
     }
 
     async fn enqueue_outbox_once(&self, job: &OutboxJob) -> Result<bool, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock).
+        let _alloc = self.alloc_lock.lock().await;
         let id = if job.id.trim().is_empty() {
             let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM outbox")
                 .fetch_all(&self.pool)

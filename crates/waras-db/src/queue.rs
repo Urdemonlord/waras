@@ -39,10 +39,10 @@ impl Db {
     }
 
     /// Ambil nomor antrean baru: nomor berikutnya per prefix poli + tanggal.
-    /// Retry alokasi id (maks 5x) bila dua penulis bersamaan menghitung
-    /// nomor yang sama dan insert kedua kena pelanggaran PK (A2: di PG
-    /// 20 penulis bersamaan 59% gagal sebelum retry ini; di SQLite satu
-    /// writer jarang kena, tapi retry-nya tidak merugikan).
+    /// Alokasi nomor antrean: `take_queue_once` memegang `Db::alloc_lock`
+    /// selama hitung-max + INSERT, jadi penulis bersamaan dalam satu
+    /// proses tidak bisa menghitung nomor yang sama. Retry maks 5x di
+    /// sini hanya jaring pengaman untuk tabrakan antar proses.
     pub async fn take_queue(
         &self,
         patient_id: &str,
@@ -76,6 +76,9 @@ impl Db {
         doctor: &str,
         date: NaiveDate,
     ) -> Result<QueueEntry, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let prefix = poli_prefix(poli);
         let numbers: Vec<String> = sqlx::query_scalar(
             "SELECT number FROM queue_entries WHERE date = ? AND number LIKE ?",

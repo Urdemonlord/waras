@@ -536,6 +536,15 @@ impl<'a> DbTx<'a> {
 #[derive(Debug, Clone)]
 pub struct Db {
     pool: DbPool,
+    /// Mutex proses untuk alokasi id baca-max-lalu-insert (A2): tanpa
+    /// ini dua penulis bersamaan di proses yang sama menghitung id yang
+    /// sama dan yang kedua gagal pelanggaran PK — retry 5x saja tidak
+    /// cukup bila 20 thread tersinkron (tiap ronde hanya 1 yang lolos,
+    /// butuh ~20 ronde). Kunci ini membuat hitung-max + INSERT atomik
+    /// antar task dalam satu proses; retry tetap ada sebagai jaring
+    /// pengaman untuk tabrakan antar proses. Hanya dipakai tiga jalur
+    /// tulis bersamaan (antrean, resep, outbox); tidak pernah bersarang.
+    alloc_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Db {
@@ -551,7 +560,10 @@ impl Db {
         let pool = DbPool::connect_sqlite(&url, if in_memory { 1 } else { 5 })
             .await
             .map_err(|e| WarasError::Database(format!("gagal membuka DB {path}: {e}")))?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            alloc_lock: Arc::new(tokio::sync::Mutex::new(())),
+        })
     }
 
     /// Buka pool PostgreSQL (mode rumah sakit). `url` bentuk
@@ -561,7 +573,10 @@ impl Db {
         let pool = DbPool::connect_postgres(url)
             .await
             .map_err(|e| WarasError::Database(format!("gagal membuka DB postgres: {e}")))?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            alloc_lock: Arc::new(tokio::sync::Mutex::new(())),
+        })
     }
 
     /// Buka DB untuk test (Fase A, A2): bila env `WARAS_TEST_PG_URL`

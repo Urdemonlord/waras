@@ -30,9 +30,9 @@ impl Db {
 
     /// Seperti `prescribe`, tapi status awal bisa diminta
     /// (mis. MenungguKonfirmasi untuk resep pengganti). Default pemanggil
-    /// biasa tetap Aktif lewat `prescribe`. Retry alokasi id RX-#### (maks
-    /// 5x) bila dua penulis bersamaan menghitung id yang sama (A2, sama
-    /// seperti `take_queue`).
+    /// biasa tetap Aktif lewat `prescribe`. `prescribe_as_once` memegang
+    /// `Db::alloc_lock` selama hitung id + INSERT + audit; retry maks 5x
+    /// di sini hanya jaring pengaman untuk tabrakan antar proses.
     pub async fn prescribe_as(
         &self,
         actor: &str,
@@ -78,6 +78,10 @@ impl Db {
         // ("Amoxicillin 500 mg 500 mg 1x1").
         let dosage = waras_core::dosage::normalize_dosage(&input.drug_name, &input.dosage);
 
+        // Kunci alokasi (lihat Db::alloc_lock): hitung id + INSERT + audit
+        // harus atomik antar task dalam satu proses. Baca encounter/alergi
+        // di atas sengaja di luar kunci supaya seksi kritis tetap pendek.
+        let _alloc = self.alloc_lock.lock().await;
         let ids_all: Vec<String> = sqlx::query_scalar("SELECT id FROM medication_requests")
             .fetch_all(&self.pool)
             .await
