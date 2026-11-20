@@ -207,25 +207,46 @@ ulang.
   4 mesin HD). KPI dasbor tidak berubah karena A4 (tidak ada
   perubahan data; hanya 3 tabel baru + 1 kolom baru).
 
-## 6. Verifikasi
+## 6. Verifikasi (21 Nov 2026, sandbox; skrip
+`~/workspace/waras/.fase-a-scratch/a4/verify-a4.sh`)
 
-<!-- TODO: isi setelah boot + curl -->
-
-- `cargo test --offline`: TODO tes, semua hijau.
-- `cargo build --release --offline`: TODO.
-- Boot di `~/workspace/waras/.fase-a-scratch/` (DB temp, BUKAN
-  `/tmp`, bukan live):
-  - portal login `{nik, password: waras123}` -> 200 + token;
-    `{nik, birth_date}` -> 400; tanggal lahir sebagai kata
+- `cargo test --offline`: **239 tes, semua hijau, 0 gagal**
+  (waras-api 89, waras-db 80, waras-bridge 35, waras-core 32,
+  waras-web 3; bin 0). Baseline Fase 4: 227 — tambah 12 tes A4.
+  Catatan: satu run penuh sempat terpotong runtime restart saat
+  `waras-db`; run itu sudah mencatat waras-api 89/0, lalu
+  `waras-db` + `waras-web` diulang terpisah (80/0 + 3/0).
+  Total waktu run penuh ~22 menit (seed Argon2 per tes + CPU
+  dibagi agen lain).
+- `cargo build --release --offline`: OK (11m 49 dtk).
+- Boot di `~/workspace/waras/.fase-a-scratch/a4/` (DB temp
+  `waras-a4.db`, BUKAN `/tmp`, bukan live), skrip verifikasi
+  `verify-a4.sh`: **33 PASS, 0 FAIL** (`verify-a4-run2.log`):
+  - portal login `{nik, password: waras123}` -> 200 + token 64
+    hex; `/api/portal/me` NIK tersensor `337402******0001`, NIK
+    lengkap tidak muncul;
+  - `{nik, birth_date}` -> 400; tanggal lahir sebagai kata
     sandi -> 401;
-  - login staf 5x salah -> 429 + `Retry-After`; kata sandi benar
-    saat terkunci -> 429; (jendela 15 menit tidak ditunggu penuh
-    saat verifikasi curl — kedaluwarsa jendela dibuktikan tes unit
-    dengan memajukan `window_start` di DB);
-  - rate limit publik: 100 OK, ke-101 429, restart server, 429
-    tetap (bukti persistensi);
-  - header keamanan ada di `/api/health`, `/`, dan `/portal`;
-  - traversal: TODO.
+  - logout portal -> 200, token yang sama lalu 401 di `/portal/me`;
+  - login staf 4x salah -> 401, ke-5 -> 429 + `Retry-After`,
+    kata sandi benar saat terkunci -> 429; pengguna lain (sari)
+    tidak kena kunci;
+  - rate limit publik: 100 OK, ke-101 -> 429 + `Retry-After`,
+    restart server -> tetap 429 (bukti persistensi); sesi staf
+    lama tetap valid setelah restart (200);
+  - header keamanan ada di `/api/health` dan `/portal`;
+  - traversal `/assets/..%2f..%2fetc%2fpasswd` dan
+    `/css/..%2f..%2fCargo.toml` -> 404; aset normal 200;
+  - KPI tidak berubah: lab_pending 3, lab_critical 1,
+    emergency_red 1, beds_occupied 86.
+- Catatan boot: boot pertama dari DB kosong butuh ~100 detik
+  sampai `/api/health` menjawab (seed Argon2 ~20 hash + tulis
+  SQLite di BTRFS terkompresi, sementara agen lain juga build).
+  Run verifikasi pertama GAGAL total (32 FAIL) karena skrip hanya
+  menunggu 60 detik — bukan bug server; skrip kini menunggu
+  sampai 240 detik. Jendela lockout 15 menit TIDAK ditunggu penuh
+  saat verifikasi curl — kedaluwarsa jendela dibuktikan tes unit
+  dengan memajukan `window_start`/`locked_until` di DB.
 - Migrasi 0007 dialek Postgres (`migrations-pg/`) BELUM TERBUKTI
   — ditulis mengikuti pola 0001–0006 (BIGINT, ALTER biasa),
   tapi TIDAK PERNAH dijalankan di Postgres nyata. Koordinator
