@@ -561,3 +561,25 @@ WARAS_DATABASE_URL=   # bila diisi postgres://... -> mode PostgreSQL (rumah saki
 `/api/health` mengembalikan `mode: "sqlite" | "postgres"`.
 Footer UI: "Mode Rumah Sakit · PostgreSQL" bila Postgres,
 "Mode Klinik · SQLite" bila SQLite.
+
+## 10.4 Status verifikasi mode PostgreSQL (jujur)
+
+- Terverifikasi oleh agen D (20 Nov 2026, sandbox): server PG 16
+  lokal, smoke test 3/3 dari DB kosong — migrasi 0001–0004,
+  seed Fase 1+2+3 (12 pasien, 6 pengguna, 8 hasil lab, 7 order
+  radiologi, 8 klaim casemix), klaim outbox lewat transaksi,
+  `log_audit` id nyata. Bukti wrapper diperlukan: `AnyPool` mentah
+  gagal (`?` dianggap operator JSON PG), `DbPool` berhasil.
+- TIDAK terverifikasi ulang oleh koordinator: server PG sandbox
+  hilang setelah restart service (tidak ada lagi binary/data PG
+  di sandbox, tidak ada docker; `apt-get update` lain macet 14+
+  menit di pid 783, bukan milik tugas ini, tidak dibunuh). Jadi
+  boot HTTP mode Postgres + `GET /api/health` `mode: "postgres"`
+  + alur tulis Fase 3 di atas PG belum dijalankan koordinator.
+- Yang BELUM pernah dieksekusi di PG nyata: cabang `ON CONFLICT
+  (idempotency_key) DO NOTHING` di `enqueue_outbox` (perbaikan
+  koordinator atas temuan D) dan migrasi 0005 (kedua direktori).
+  SQL-nya standar PG dan rewrite `?`→`$n` teruji unit, tapi
+  tetap harus dibuktikan di PG sebelum deploy mode Postgres.
+- Tes `connect_postgres_refused_is_error_not_panic` hanya
+  membuktikan penolakan koneksi jadi error, bukan koneksi sukses.
