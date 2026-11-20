@@ -208,9 +208,48 @@ pengembangan — jalankan dari worktree `a3-backup` setelah
 
 ### Hasil drill 21 Nov 2026 (sandbox, pertama kali)
 
-<!-- DRILL-RESULT -->
-<!-- (diisi setelah drill jalan; lihat log di
-     ~/workspace/waras/.fase-a-scratch/a3/drill-a3.log) -->
+Drill dijalankan 21 Nov 2026 ~04:08 WIB (20 Nov 21:08 UTC) di sandbox,
+worktree `a3-backup`, binary release dari commit yang sama dengan
+skrip (tidak ada perubahan kode aplikasi). Skrip drill:
+`~/workspace/waras/.fase-a-scratch/a3/drill-a3.sh` (tidak ikut rilis).
+Log lengkap: `~/workspace/waras/.fase-a-scratch/a3/drill-a3.log`.
+
+- Boot 1 (DB scratch kosong, seed): `/api/health` OK setelah 94 dtk
+  (seed lambat di sandbox 1,5 CPU karena hash Argon2 — di VPS akan
+  jauh lebih cepat).
+- Data drill: pasien baru `RM-000826` (Drill Pasien A3), antrean baru
+  `A-045`, resep `RX-1048` Azithromycin 500 mg DRILL-A3 (encounter
+  seed `ENC-2026-11-19-014`, lolos safety). Login seed
+  `ahmad`/`waras123` — tidak diubah.
+- Snapshot SEBELUM: `patients=15 queue=45 rx=9 audit=10`,
+  `RX-1048|Azithromycin 500 mg DRILL-A3|aktif`,
+  dashboard `queue_total=45 patients_today=248`.
+- Backup diambil **dengan server masih berjalan** (1 detik, 508K,
+  `integrity_check` ok, `pasien/antrean/resep = 15/45/9`).
+- Server dimatikan, DB dihapus, restore satu perintah:
+  `waras-restore.sh` memverifikasi backup (`integrity_check` ok +
+  sha256 cocok), mencatat tidak ada salinan pra-restore (DB sudah
+  hilang — perilaku yang diharapkan), rename atomik, OK dalam 1 detik.
+- Boot 2: health OK setelah 2 dtk (tidak perlu seed ulang), login
+  seed OK.
+- Snapshot SESUDAH: **identik** — `patients=15 queue=45 rx=9
+  audit=10`, `RX-1048|Azithromycin 500 mg DRILL-A3|aktif`,
+  `queue_total=45 patients_today=248`. **DRILL LULUS, tanpa kehilangan
+  data.**
+
+Catatan dari tiga kali percobaan drill (dua gagal, satu lulus) — semua
+kegagalan ada di skrip/drill, bukan di data:
+1. Nama tabel resep adalah `medication_requests`, bukan
+   `prescriptions` — snapshot sempat kosong. Diperbaiki di kedua skrip
+   + drill.
+2. `waras-restore.sh` awalnya menolak bila DB aktif tidak ada — padahal
+   drill (dan bencana nyata) justru menghapus DB. Sekarang restore
+   tetap jalan dengan peringatan bila DB hilang.
+3. Deteksi server `pgrep -f waras` terlalu luas (cocok dengan `cargo
+   test` di worktree lain + skrip drill sendiri) dan menolak restore
+   yang aman. Sekarang hanya `pgrep -x waras` + `$WARAS_PID_FILE`.
+4. Hitungan `audit_log` SESUDAH harus diambil sebelum login verifikasi
+   (login menulis 1 entri `auth.login` ke audit yang append-only).
 
 ## PostgreSQL (mode rumah sakit)
 
