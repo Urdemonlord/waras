@@ -67,6 +67,40 @@ impl Db {
         row.map(|r| r.into_domain()).transpose()
     }
 
+    /// Validasi pasien salah (FASE3.md §6): encounter harus milik pasien
+    /// yang dimaksud. Encounter tidak ada → `NotFound`; pasien tidak
+    /// cocok → `WrongPatient` (422). `patient_id` kosong → dilewati
+    /// (tidak ada yang dicocokkan).
+    pub async fn verify_encounter_patient(
+        &self,
+        encounter_id: &str,
+        patient_id: &str,
+    ) -> Result<(), WarasError> {
+        if patient_id.trim().is_empty() {
+            return Ok(());
+        }
+        let encounter = self
+            .get_encounter(encounter_id)
+            .await?
+            .ok_or_else(|| WarasError::NotFound(format!("encounter {encounter_id} tidak ditemukan")))?;
+        if encounter.patient_id == patient_id {
+            return Ok(());
+        }
+        let expected = self
+            .get_patient(&encounter.patient_id)
+            .await?
+            .map(|p| format!("{} ({})", p.name, p.id))
+            .unwrap_or_else(|| encounter.patient_id.clone());
+        let got = self
+            .get_patient(patient_id)
+            .await?
+            .map(|p| format!("{} ({})", p.name, p.id))
+            .unwrap_or_else(|| patient_id.to_string());
+        Err(WarasError::WrongPatient(format!(
+            "Encounter {encounter_id} milik pasien {expected}, bukan {got}"
+        )))
+    }
+
     /// Ubah status encounter (dipakai `close_encounter` Fase 2: -> Selesai).
     pub async fn set_encounter_status(
         &self,
@@ -341,5 +375,45 @@ impl Db {
         .await
         .map_err(db_err)?;
         rows.into_iter().map(|r| r.into_domain()).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn seeded_db() -> Db {
+        let db = Db::connect("sqlite::memory:").await.expect("buka in-memory");
+        db.migrate().await.expect("migrasi");
+        assert!(db.seed_if_empty().await.expect("seed"));
+        db
+    }
+
+    #[tokio::test]
+    async fn verify_encounter_patient_wrong_patient_is_422() {
+        let db = seeded_db().await;
+        // ENC-...-014 milik Siti (RM-000812).
+        db.verify_encounter_patient("ENC-2026-11-19-014", "RM-000812")
+            .await
+            .unwrap();
+        // patient_id kosong -> dilewati.
+        db.verify_encounter_patient("ENC-2026-11-19-014", "")
+            .await
+            .unwrap();
+        let err = db
+            .verify_encounter_patient("ENC-2026-11-19-014", "RM-000813")
+            .await;
+        assert!(matches!(err, Err(WarasError::WrongPatient(_))));
+        let err = err.unwrap_err();
+        assert_eq!(err.http_status(), 422);
+        assert_eq!(
+            err.to_string(),
+            "pasien salah: Encounter ENC-2026-11-19-014 milik pasien Siti Rahmawati (RM-000812), bukan Budi Santoso (RM-000813)"
+        );
+        assert!(matches!(
+            db.verify_encounter_patient("ENC-2026-11-19-999", "RM-000812")
+                .await,
+            Err(WarasError::NotFound(_))
+        ));
     }
 }

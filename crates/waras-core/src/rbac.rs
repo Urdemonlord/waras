@@ -30,6 +30,16 @@ pub enum Action {
     CreateReferral,
     CreateClaim,
     SyncBridges,
+    // -- Fase 3 (FASE3.md §3) -------------------------------------------
+    ViewRumahSakit,
+    TriaseIgd,
+    KelolaRawatInap,
+    KelolaOperasi,
+    PesanLab,
+    PesanRadiologi,
+    HasilLab,
+    LaporanRadiologi,
+    GroupingCasemix,
 }
 
 impl Action {
@@ -58,6 +68,15 @@ impl Action {
             Action::CreateReferral => "buat rujukan",
             Action::CreateClaim => "buat klaim",
             Action::SyncBridges => "sinkronisasi jembatan",
+            Action::ViewRumahSakit => "lihat modul rumah sakit",
+            Action::TriaseIgd => "triase dan ubah status IGD",
+            Action::KelolaRawatInap => "kelola rawat inap",
+            Action::KelolaOperasi => "kelola operasi dan persalinan",
+            Action::PesanLab => "pesan pemeriksaan lab",
+            Action::PesanRadiologi => "pesan pemeriksaan radiologi",
+            Action::HasilLab => "isi hasil lab",
+            Action::LaporanRadiologi => "tulis laporan radiologi",
+            Action::GroupingCasemix => "grouping dan kelola casemix",
         }
     }
 }
@@ -85,6 +104,15 @@ pub fn can(role: Role, action: Action) -> bool {
                 | ViewBridges
                 | CreateSep
                 | CreateReferral
+                | ViewRumahSakit
+                | TriaseIgd
+                | KelolaRawatInap
+                | KelolaOperasi
+                | PesanLab
+                | PesanRadiologi
+                | HasilLab
+                | LaporanRadiologi
+                | GroupingCasemix
         ),
         Role::Perawat => matches!(
             action,
@@ -97,14 +125,26 @@ pub fn can(role: Role, action: Action) -> bool {
                 | ViewDrugs
                 | ViewBridges
                 | CreateSep
+                | ViewRumahSakit
+                | TriaseIgd
+                | KelolaRawatInap
+                | PesanLab
+                | PesanRadiologi
         ),
         Role::Apoteker => matches!(
             action,
-            ViewDashboard | ViewPatient | Dispense | ViewDrugs | ViewBridges
+            ViewDashboard | ViewPatient | Dispense | ViewDrugs | ViewBridges | ViewRumahSakit
         ),
         Role::Kasir => matches!(
             action,
-            ViewDashboard | ViewPatient | CreateInvoice | ReceivePayment | ViewBridges | CreateClaim
+            ViewDashboard
+                | ViewPatient
+                | CreateInvoice
+                | ReceivePayment
+                | ViewBridges
+                | CreateClaim
+                | ViewRumahSakit
+                | GroupingCasemix
         ),
     }
 }
@@ -150,6 +190,15 @@ mod tests {
             Action::CreateReferral,
             Action::CreateClaim,
             Action::SyncBridges,
+            Action::ViewRumahSakit,
+            Action::TriaseIgd,
+            Action::KelolaRawatInap,
+            Action::KelolaOperasi,
+            Action::PesanLab,
+            Action::PesanRadiologi,
+            Action::HasilLab,
+            Action::LaporanRadiologi,
+            Action::GroupingCasemix,
         ] {
             assert!(can(Role::Admin, action));
         }
@@ -176,5 +225,62 @@ mod tests {
         assert!(!can(Role::Kasir, Action::CreateSep));
         assert!(!can(Role::Kasir, Action::ManageOutbox));
         assert!(!can(Role::Kasir, Action::SyncBridges));
+    }
+
+    #[test]
+    fn fase3_matrix() {
+        // FASE3.md §3.
+        let all9 = [
+            Action::ViewRumahSakit,
+            Action::TriaseIgd,
+            Action::KelolaRawatInap,
+            Action::KelolaOperasi,
+            Action::PesanLab,
+            Action::PesanRadiologi,
+            Action::HasilLab,
+            Action::LaporanRadiologi,
+            Action::GroupingCasemix,
+        ];
+        // DokterUmum: semua 9.
+        for a in all9 {
+            assert!(can(Role::DokterUmum, a), "dokter harus bisa {a:?}");
+        }
+        // Perawat: lihat + triase + ranap + pesan lab/rad saja.
+        for a in [
+            Action::ViewRumahSakit,
+            Action::TriaseIgd,
+            Action::KelolaRawatInap,
+            Action::PesanLab,
+            Action::PesanRadiologi,
+        ] {
+            assert!(can(Role::Perawat, a), "perawat harus bisa {a:?}");
+        }
+        for a in [
+            Action::KelolaOperasi,
+            Action::HasilLab,
+            Action::LaporanRadiologi,
+            Action::GroupingCasemix,
+        ] {
+            assert!(!can(Role::Perawat, a), "perawat tidak boleh {a:?}");
+        }
+        // Apoteker: lihat saja.
+        assert!(can(Role::Apoteker, Action::ViewRumahSakit));
+        for a in all9.iter().filter(|a| **a != Action::ViewRumahSakit) {
+            assert!(!can(Role::Apoteker, *a), "apoteker tidak boleh {a:?}");
+        }
+        // Kasir: lihat + grouping saja.
+        assert!(can(Role::Kasir, Action::ViewRumahSakit));
+        assert!(can(Role::Kasir, Action::GroupingCasemix));
+        for a in [
+            Action::TriaseIgd,
+            Action::KelolaRawatInap,
+            Action::KelolaOperasi,
+            Action::PesanLab,
+            Action::PesanRadiologi,
+            Action::HasilLab,
+            Action::LaporanRadiologi,
+        ] {
+            assert!(!can(Role::Kasir, a), "kasir tidak boleh {a:?}");
+        }
     }
 }

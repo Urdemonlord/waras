@@ -18,6 +18,10 @@ pub(crate) fn claim_status_to_str(s: ClaimStatus) -> &'static str {
         ClaimStatus::Terkirim => "terkirim",
         ClaimStatus::Diterima => "diterima",
         ClaimStatus::Ditolak => "ditolak",
+        ClaimStatus::Dibayar => "dibayar",
+        ClaimStatus::Terverifikasi => "terverifikasi",
+        ClaimStatus::Diajukan => "diajukan",
+        ClaimStatus::Pending => "pending",
     }
 }
 
@@ -27,6 +31,10 @@ pub(crate) fn claim_status_from_str(s: &str) -> Result<ClaimStatus, WarasError> 
         "terkirim" => ClaimStatus::Terkirim,
         "diterima" => ClaimStatus::Diterima,
         "ditolak" => ClaimStatus::Ditolak,
+        "dibayar" => ClaimStatus::Dibayar,
+        "terverifikasi" => ClaimStatus::Terverifikasi,
+        "diajukan" => ClaimStatus::Diajukan,
+        "pending" => ClaimStatus::Pending,
         _ => {
             return Err(WarasError::Database(format!(
                 "nilai claim_status tidak dikenal di DB: {s}"
@@ -40,13 +48,16 @@ pub(crate) fn claim_status_from_str(s: &str) -> Result<ClaimStatus, WarasError> 
 #[derive(Debug, FromRow)]
 pub struct ClaimRow {
     pub id: String,
-    pub invoice_id: String,
+    /// Fase 3: boleh NULL (klaim grouping tidak selalu dari tagihan).
+    pub invoice_id: Option<String>,
     pub sep_id: Option<String>,
     pub ina_cbg_code: String,
     pub amount: i64,
     pub status: String,
     pub submitted_at: Option<String>,
     pub created_at: String,
+    /// Fase 3: catatan grouping lokal (boleh NULL).
+    pub grouping_note: Option<String>,
 }
 
 impl ClaimRow {
@@ -63,6 +74,7 @@ impl ClaimRow {
                 None => None,
             },
             created_at: parse_dt(&self.created_at)?,
+            grouping_note: self.grouping_note,
         })
     }
 }
@@ -142,8 +154,8 @@ impl Db {
         };
         sqlx::query(
             "INSERT INTO claims (id, invoice_id, sep_id, ina_cbg_code, amount,
-                 status, submitted_at, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 status, submitted_at, created_at, grouping_note)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&c.invoice_id)
@@ -153,6 +165,7 @@ impl Db {
         .bind(claim_status_to_str(c.status))
         .bind(c.submitted_at.map(fmt_dt))
         .bind(fmt_dt(c.created_at))
+        .bind(&c.grouping_note)
         .execute(&self.pool)
         .await
         .map_err(db_err)?;
@@ -239,15 +252,21 @@ mod tests {
         assert_eq!((beds[4].available, beds[4].total), (0, 12));
 
         let claims = db.list_claims().await.unwrap();
-        assert_eq!(claims.len(), 1);
-        let c = &claims[0];
+        // 1 klaim Fase 2 + 8 klaim seed Fase 3.
+        assert_eq!(claims.len(), 9);
+        let c = db
+            .get_claim("CLM-20261119-001")
+            .await
+            .unwrap()
+            .expect("klaim Fase 2 ada");
         assert_eq!(c.id, "CLM-20261119-001");
-        assert_eq!(c.invoice_id, "INV-2026-1181");
+        assert_eq!(c.invoice_id.as_deref(), Some("INV-2026-1181"));
         assert_eq!(c.sep_id.as_deref(), Some("SEP-20261119-001"));
         assert_eq!(c.ina_cbg_code, "J-4-17-I");
         assert_eq!(c.amount, 185_000);
         assert_eq!(c.status, ClaimStatus::Draft);
         assert_eq!(c.submitted_at, None);
+        assert_eq!(c.grouping_note, None);
     }
 
     #[tokio::test]
@@ -282,18 +301,19 @@ mod tests {
         let c = db
             .create_claim(&Claim {
                 id: String::new(),
-                invoice_id: "INV-2026-1182".into(),
+                invoice_id: Some("INV-2026-1182".into()),
                 sep_id: Some("SEP-20261119-002".into()),
                 ina_cbg_code: "J-4-17-I".into(),
                 amount: 120_000,
                 status: ClaimStatus::Draft,
                 submitted_at: None,
                 created_at: today_8(),
+                grouping_note: None,
             })
             .await
             .unwrap();
         assert_eq!(c.id, "CLM-20261119-002");
-        assert_eq!(db.list_claims().await.unwrap().len(), 2);
+        assert_eq!(db.list_claims().await.unwrap().len(), 10);
 
         db.set_claim_status(&c.id, ClaimStatus::Terkirim, Some("2026-11-19 10:00:00"))
             .await

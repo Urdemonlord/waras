@@ -6,6 +6,7 @@
 //! change it here first; the compiler will point at every place that drifts.
 
 pub mod bridge;
+pub mod casemix;
 pub mod dosage;
 pub mod error;
 pub mod fhir;

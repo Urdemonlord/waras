@@ -7,12 +7,181 @@ use crate::{parse_date, parse_dt};
 use sqlx::FromRow;
 use waras_core::{
     types::{
-        AllergyIntolerance, Appointment, AuditEntry, Condition, DailyStat, Drug, Encounter,
-        Invoice, MedicationRequest, Notification, Observation, Patient, Payment, QueueEntry,
-        SoapNote, SoapVersion, User,
+        Admission, AdmissionStatus, AllergyIntolerance, Appointment, AuditEntry, BedStatus,
+        CareNote, Condition, DailyStat, Delivery, DeliveryRoom, Drug, Encounter, IgdObservation,
+        IgdStatus, IgdVisit, Invoice, LabFlag, LabOrder, LabOrderStatus, LabResult,
+        MedicationRequest, Notification, Observation, Patient, Payment, QueueEntry, RadOrder,
+        RadOrderStatus, RadReport, SoapNote, SoapVersion, Surgery, SurgeryStatus, TriageLevel,
+        User, Ward, WardBed,
     },
     WarasError,
 };
+
+/// Jam sekarang sebagai `YYYY-MM-DD HH:MM:SS` dengan TANGGAL KLINIK
+/// (CONTRACT.md §0: transaksi baru memakai tanggal klinik, bukan tanggal
+/// sistem) dan jam dari jam sistem. Dipakai `created_at`/`recorded_at`
+/// runtime Fase 3 supaya `list_*` berfilter tanggal klinik menemukannya.
+/// (Ditaruh di sini karena `lib.rs` milik koordinator; boleh dipindah ke
+/// sana saat merge.)
+pub(crate) fn clinic_now_string() -> String {
+    use chrono::Timelike;
+    let now = crate::now_naive();
+    let today = crate::clinic_today();
+    let dt = today
+        .and_hms_opt(now.hour(), now.minute(), now.second())
+        .unwrap_or(now);
+    crate::fmt_dt(dt)
+}
+
+fn bad_fase3(what: &str, v: &str) -> WarasError {
+    WarasError::Database(format!("nilai {what} tidak dikenal di DB: {v}"))
+}
+
+// --- Fase 3: enum <-> TEXT (snake_case, gaya convert.rs) -------------------
+
+pub(crate) fn triage_to_str(t: TriageLevel) -> &'static str {
+    match t {
+        TriageLevel::Merah => "merah",
+        TriageLevel::Kuning => "kuning",
+        TriageLevel::Hijau => "hijau",
+    }
+}
+pub(crate) fn triage_from_str(s: &str) -> Result<TriageLevel, WarasError> {
+    Ok(match s {
+        "merah" => TriageLevel::Merah,
+        "kuning" => TriageLevel::Kuning,
+        "hijau" => TriageLevel::Hijau,
+        _ => return Err(bad_fase3("triage", s)),
+    })
+}
+
+pub(crate) fn igd_status_to_str(s: IgdStatus) -> &'static str {
+    match s {
+        IgdStatus::Menunggu => "menunggu",
+        IgdStatus::Observasi => "observasi",
+        IgdStatus::Tindakan => "tindakan",
+        IgdStatus::Resusitasi => "resusitasi",
+        IgdStatus::Selesai => "selesai",
+        IgdStatus::Dirujuk => "dirujuk",
+    }
+}
+pub(crate) fn igd_status_from_str(s: &str) -> Result<IgdStatus, WarasError> {
+    Ok(match s {
+        "menunggu" => IgdStatus::Menunggu,
+        "observasi" => IgdStatus::Observasi,
+        "tindakan" => IgdStatus::Tindakan,
+        "resusitasi" => IgdStatus::Resusitasi,
+        "selesai" => IgdStatus::Selesai,
+        "dirujuk" => IgdStatus::Dirujuk,
+        _ => return Err(bad_fase3("igd_status", s)),
+    })
+}
+
+pub(crate) fn bed_status_to_str(s: BedStatus) -> &'static str {
+    match s {
+        BedStatus::Terisi => "terisi",
+        BedStatus::Kosong => "kosong",
+        BedStatus::Dibersihkan => "dibersihkan",
+    }
+}
+pub(crate) fn bed_status_from_str(s: &str) -> Result<BedStatus, WarasError> {
+    Ok(match s {
+        "terisi" => BedStatus::Terisi,
+        "kosong" => BedStatus::Kosong,
+        "dibersihkan" => BedStatus::Dibersihkan,
+        _ => return Err(bad_fase3("bed_status", s)),
+    })
+}
+
+pub(crate) fn admission_status_to_str(s: AdmissionStatus) -> &'static str {
+    match s {
+        AdmissionStatus::Dirawat => "dirawat",
+        AdmissionStatus::Pulang => "pulang",
+        AdmissionStatus::Dirujuk => "dirujuk",
+    }
+}
+pub(crate) fn admission_status_from_str(s: &str) -> Result<AdmissionStatus, WarasError> {
+    Ok(match s {
+        "dirawat" => AdmissionStatus::Dirawat,
+        "pulang" => AdmissionStatus::Pulang,
+        "dirujuk" => AdmissionStatus::Dirujuk,
+        _ => return Err(bad_fase3("admission_status", s)),
+    })
+}
+
+pub(crate) fn surgery_status_to_str(s: SurgeryStatus) -> &'static str {
+    match s {
+        SurgeryStatus::Terjadwal => "terjadwal",
+        SurgeryStatus::Menunggu => "menunggu",
+        SurgeryStatus::Siap => "siap",
+        SurgeryStatus::Berjalan => "berjalan",
+        SurgeryStatus::Selesai => "selesai",
+        SurgeryStatus::Batal => "batal",
+    }
+}
+pub(crate) fn surgery_status_from_str(s: &str) -> Result<SurgeryStatus, WarasError> {
+    Ok(match s {
+        "terjadwal" => SurgeryStatus::Terjadwal,
+        "menunggu" => SurgeryStatus::Menunggu,
+        "siap" => SurgeryStatus::Siap,
+        "berjalan" => SurgeryStatus::Berjalan,
+        "selesai" => SurgeryStatus::Selesai,
+        "batal" => SurgeryStatus::Batal,
+        _ => return Err(bad_fase3("surgery_status", s)),
+    })
+}
+
+pub(crate) fn lab_order_status_to_str(s: LabOrderStatus) -> &'static str {
+    match s {
+        LabOrderStatus::Menunggu => "menunggu",
+        LabOrderStatus::Proses => "proses",
+        LabOrderStatus::Selesai => "selesai",
+        LabOrderStatus::Kritis => "kritis",
+    }
+}
+pub(crate) fn lab_order_status_from_str(s: &str) -> Result<LabOrderStatus, WarasError> {
+    Ok(match s {
+        "menunggu" => LabOrderStatus::Menunggu,
+        "proses" => LabOrderStatus::Proses,
+        "selesai" => LabOrderStatus::Selesai,
+        "kritis" => LabOrderStatus::Kritis,
+        _ => return Err(bad_fase3("lab_order_status", s)),
+    })
+}
+
+pub(crate) fn lab_flag_to_str(f: LabFlag) -> &'static str {
+    match f {
+        LabFlag::Normal => "normal",
+        LabFlag::Tinggi => "tinggi",
+        LabFlag::Rendah => "rendah",
+        LabFlag::Kritis => "kritis",
+    }
+}
+pub(crate) fn lab_flag_from_str(s: &str) -> Result<LabFlag, WarasError> {
+    Ok(match s {
+        "normal" => LabFlag::Normal,
+        "tinggi" => LabFlag::Tinggi,
+        "rendah" => LabFlag::Rendah,
+        "kritis" => LabFlag::Kritis,
+        _ => return Err(bad_fase3("lab_flag", s)),
+    })
+}
+
+pub(crate) fn rad_order_status_to_str(s: RadOrderStatus) -> &'static str {
+    match s {
+        RadOrderStatus::Menunggu => "menunggu",
+        RadOrderStatus::Proses => "proses",
+        RadOrderStatus::Selesai => "selesai",
+    }
+}
+pub(crate) fn rad_order_status_from_str(s: &str) -> Result<RadOrderStatus, WarasError> {
+    Ok(match s {
+        "menunggu" => RadOrderStatus::Menunggu,
+        "proses" => RadOrderStatus::Proses,
+        "selesai" => RadOrderStatus::Selesai,
+        _ => return Err(bad_fase3("rad_order_status", s)),
+    })
+}
 
 #[derive(Debug, FromRow)]
 pub struct UserRow {
@@ -490,6 +659,348 @@ impl NotificationRow {
             time: self.time,
             date: parse_date(&self.date)?,
             read: self.read != 0,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fase 3 (FASE3.md §1–§2): baris tabel IGD / rawat inap / operasi &
+// bersalin / lab / radiologi.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, FromRow)]
+pub struct IgdVisitRow {
+    pub id: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    pub complaint: String,
+    pub triage: String,
+    pub doctor: String,
+    pub status: String,
+    pub arrived_at: String,
+    pub created_at: String,
+}
+impl IgdVisitRow {
+    pub fn into_domain(self) -> Result<IgdVisit, WarasError> {
+        Ok(IgdVisit {
+            id: self.id,
+            patient_id: self.patient_id,
+            encounter_id: self.encounter_id,
+            complaint: self.complaint,
+            triage: triage_from_str(&self.triage)?,
+            doctor: self.doctor,
+            status: igd_status_from_str(&self.status)?,
+            arrived_at: self.arrived_at,
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct IgdObservationRow {
+    pub id: String,
+    pub igd_id: String,
+    pub note: String,
+    pub recorded_by: String,
+    pub recorded_at: String,
+}
+impl IgdObservationRow {
+    pub fn into_domain(self) -> Result<IgdObservation, WarasError> {
+        Ok(IgdObservation {
+            id: self.id,
+            igd_id: self.igd_id,
+            note: self.note,
+            recorded_by: self.recorded_by,
+            recorded_at: parse_dt(&self.recorded_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct WardRow {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub floor: String,
+}
+impl WardRow {
+    pub fn into_domain(self) -> Result<Ward, WarasError> {
+        Ok(Ward {
+            id: self.id,
+            name: self.name,
+            kind: self.kind,
+            floor: self.floor,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct WardBedRow {
+    pub id: String,
+    pub ward_id: String,
+    pub room: String,
+    pub bed_no: String,
+    pub status: String,
+    pub updated_at: String,
+}
+impl WardBedRow {
+    pub fn into_domain(self) -> Result<WardBed, WarasError> {
+        Ok(WardBed {
+            id: self.id,
+            ward_id: self.ward_id,
+            room: self.room,
+            bed_no: self.bed_no,
+            status: bed_status_from_str(&self.status)?,
+            updated_at: parse_dt(&self.updated_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct AdmissionRow {
+    pub id: String,
+    pub patient_id: String,
+    pub bed_id: String,
+    pub encounter_id: Option<String>,
+    pub diagnosis_code: String,
+    pub diagnosis_display: String,
+    pub admitted_date: String,
+    pub dpjp: String,
+    pub fall_risk: i64,
+    pub status: String,
+    pub discharged_at: Option<String>,
+    pub created_at: String,
+}
+impl AdmissionRow {
+    pub fn into_domain(self) -> Result<Admission, WarasError> {
+        Ok(Admission {
+            id: self.id,
+            patient_id: self.patient_id,
+            bed_id: self.bed_id,
+            encounter_id: self.encounter_id,
+            diagnosis_code: self.diagnosis_code,
+            diagnosis_display: self.diagnosis_display,
+            admitted_date: parse_date(&self.admitted_date)?,
+            dpjp: self.dpjp,
+            fall_risk: self.fall_risk != 0,
+            status: admission_status_from_str(&self.status)?,
+            discharged_at: match self.discharged_at {
+                Some(d) => Some(parse_dt(&d)?),
+                None => None,
+            },
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct CareNoteRow {
+    pub id: String,
+    pub admission_id: String,
+    pub note: String,
+    pub recorded_by: String,
+    pub recorded_at: String,
+}
+impl CareNoteRow {
+    pub fn into_domain(self) -> Result<CareNote, WarasError> {
+        Ok(CareNote {
+            id: self.id,
+            admission_id: self.admission_id,
+            note: self.note,
+            recorded_by: self.recorded_by,
+            recorded_at: parse_dt(&self.recorded_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct SurgeryRow {
+    pub id: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    pub room: String,
+    pub procedure: String,
+    pub procedure_code: String,
+    pub operator: String,
+    pub team: String,
+    pub scheduled_at: String,
+    pub status: String,
+    pub created_at: String,
+}
+impl SurgeryRow {
+    pub fn into_domain(self) -> Result<Surgery, WarasError> {
+        Ok(Surgery {
+            id: self.id,
+            patient_id: self.patient_id,
+            encounter_id: self.encounter_id,
+            room: self.room,
+            procedure: self.procedure,
+            procedure_code: self.procedure_code,
+            operator: self.operator,
+            team: self.team,
+            scheduled_at: parse_dt(&self.scheduled_at)?,
+            status: surgery_status_from_str(&self.status)?,
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct DeliveryRoomRow {
+    pub id: String,
+    pub status: String,
+}
+impl DeliveryRoomRow {
+    pub fn into_domain(self) -> Result<DeliveryRoom, WarasError> {
+        Ok(DeliveryRoom {
+            id: self.id,
+            status: bed_status_from_str(&self.status)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct DeliveryRow {
+    pub id: String,
+    pub patient_id: String,
+    pub age_years: i64,
+    pub gravida_para: String,
+    pub dilation_cm: i64,
+    pub fetal_heart_rate: i64,
+    pub midwife: String,
+    pub doctor: String,
+    pub plan: String,
+    pub room: String,
+    pub status: String,
+    pub created_at: String,
+}
+impl DeliveryRow {
+    pub fn into_domain(self) -> Result<Delivery, WarasError> {
+        Ok(Delivery {
+            id: self.id,
+            patient_id: self.patient_id,
+            age_years: self.age_years,
+            gravida_para: self.gravida_para,
+            dilation_cm: self.dilation_cm,
+            fetal_heart_rate: self.fetal_heart_rate,
+            midwife: self.midwife,
+            doctor: self.doctor,
+            plan: self.plan,
+            room: self.room,
+            status: self.status,
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct LabOrderRow {
+    pub id: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    pub test_name: String,
+    pub loinc: String,
+    pub ordered_from: String,
+    pub ordered_by: String,
+    pub status: String,
+    pub created_at: String,
+}
+impl LabOrderRow {
+    pub fn into_domain(self) -> Result<LabOrder, WarasError> {
+        Ok(LabOrder {
+            id: self.id,
+            patient_id: self.patient_id,
+            encounter_id: self.encounter_id,
+            test_name: self.test_name,
+            loinc: self.loinc,
+            ordered_from: self.ordered_from,
+            ordered_by: self.ordered_by,
+            status: lab_order_status_from_str(&self.status)?,
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct LabResultRow {
+    pub id: String,
+    pub order_id: String,
+    pub analyte: String,
+    pub loinc: Option<String>,
+    pub value_text: String,
+    pub unit: String,
+    pub ref_text: String,
+    pub ref_low: Option<f64>,
+    pub ref_high: Option<f64>,
+    pub critical_high: Option<f64>,
+    pub critical_low: Option<f64>,
+    pub flag: String,
+    pub created_at: String,
+}
+impl LabResultRow {
+    pub fn into_domain(self) -> Result<LabResult, WarasError> {
+        Ok(LabResult {
+            id: self.id,
+            order_id: self.order_id,
+            analyte: self.analyte,
+            loinc: self.loinc,
+            value_text: self.value_text,
+            unit: self.unit,
+            ref_text: self.ref_text,
+            ref_low: self.ref_low,
+            ref_high: self.ref_high,
+            critical_high: self.critical_high,
+            critical_low: self.critical_low,
+            flag: lab_flag_from_str(&self.flag)?,
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct RadOrderRow {
+    pub id: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    pub modality: String,
+    pub area: String,
+    pub ordered_from: String,
+    pub ordered_by: String,
+    pub status: String,
+    pub created_at: String,
+}
+impl RadOrderRow {
+    pub fn into_domain(self) -> Result<RadOrder, WarasError> {
+        Ok(RadOrder {
+            id: self.id,
+            patient_id: self.patient_id,
+            encounter_id: self.encounter_id,
+            modality: self.modality,
+            area: self.area,
+            ordered_from: self.ordered_from,
+            ordered_by: self.ordered_by,
+            status: rad_order_status_from_str(&self.status)?,
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct RadReportRow {
+    pub id: String,
+    pub order_id: String,
+    pub findings: String,
+    pub radiologist: String,
+    pub reported_at: String,
+}
+impl RadReportRow {
+    pub fn into_domain(self) -> Result<RadReport, WarasError> {
+        Ok(RadReport {
+            id: self.id,
+            order_id: self.order_id,
+            findings: self.findings,
+            radiologist: self.radiologist,
+            reported_at: parse_dt(&self.reported_at)?,
         })
     }
 }

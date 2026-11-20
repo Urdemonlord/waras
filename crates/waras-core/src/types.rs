@@ -801,17 +801,409 @@ pub enum ClaimStatus {
     Terkirim,
     Diterima,
     Ditolak,
+    /// Fase 3 (FASE3.md §2): status workbench Casemix.
+    Dibayar,
+    Terverifikasi,
+    Diajukan,
+    Pending,
+}
+
+impl ClaimStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ClaimStatus::Draft => "Draft",
+            ClaimStatus::Terkirim => "Terkirim",
+            ClaimStatus::Diterima => "Diterima",
+            ClaimStatus::Ditolak => "Ditolak",
+            ClaimStatus::Dibayar => "Dibayar",
+            ClaimStatus::Terverifikasi => "Terverifikasi",
+            ClaimStatus::Diajukan => "Diajukan",
+            ClaimStatus::Pending => "Pending",
+        }
+    }
 }
 
 /// Berkas klaim satu tagihan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claim {
     pub id: String,
-    pub invoice_id: String,
+    /// Fase 3: boleh NULL — klaim grouping tidak selalu berangkat dari
+    /// tagihan (FASE3.md §1). Klaim Fase 2 tetap menaut invoice.
+    pub invoice_id: Option<String>,
     pub sep_id: Option<String>,
     pub ina_cbg_code: String,
     pub amount: i64,
     pub status: ClaimStatus,
     pub submitted_at: Option<NaiveDateTime>,
     pub created_at: NaiveDateTime,
+    /// Fase 3: catatan grouping lokal (mis. diagnosis utama + kode
+    /// grouping perkiraan). NULL bila tidak ada.
+    pub grouping_note: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Rumah sakit (Fase 3): IGD, Rawat Inap, Kamar Operasi & Bersalin, Lab,
+// Radiologi, Casemix/INA-CBG. Lihat docs/FASE3.md §1–§2.
+// ---------------------------------------------------------------------------
+
+// --- IGD -------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriageLevel {
+    Merah,
+    Kuning,
+    Hijau,
+}
+
+impl TriageLevel {
+    pub fn label(&self) -> &'static str {
+        match self {
+            TriageLevel::Merah => "Merah",
+            TriageLevel::Kuning => "Kuning",
+            TriageLevel::Hijau => "Hijau",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IgdStatus {
+    Menunggu,
+    Observasi,
+    Tindakan,
+    Resusitasi,
+    Selesai,
+    Dirujuk,
+}
+
+impl IgdStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            IgdStatus::Menunggu => "Menunggu",
+            IgdStatus::Observasi => "Observasi",
+            IgdStatus::Tindakan => "Tindakan",
+            IgdStatus::Resusitasi => "Resusitasi",
+            IgdStatus::Selesai => "Selesai",
+            IgdStatus::Dirujuk => "Dirujuk",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IgdVisit {
+    /// Mis. `IGD-20261119-001`.
+    pub id: String,
+    pub patient_id: String,
+    /// Encounter fast-track (boleh NULL).
+    pub encounter_id: Option<String>,
+    pub complaint: String,
+    pub triage: TriageLevel,
+    /// Dokter jaga.
+    pub doctor: String,
+    pub status: IgdStatus,
+    /// Jam tiba, mis. `08.02`.
+    pub arrived_at: String,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IgdObservation {
+    /// Mis. `IGO-000001`.
+    pub id: String,
+    pub igd_id: String,
+    /// Teks observasi (TTV + rencana).
+    pub note: String,
+    pub recorded_by: String,
+    pub recorded_at: NaiveDateTime,
+}
+
+// --- Rawat inap ------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Ward {
+    /// Mis. `Melati` / `ICU` (id = nama bangsal).
+    pub id: String,
+    pub name: String,
+    /// Interna / Bedah / Anak / Obstetri / ICU.
+    pub kind: String,
+    /// Mis. `Lantai 2`.
+    pub floor: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BedStatus {
+    Terisi,
+    Kosong,
+    Dibersihkan,
+}
+
+impl BedStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            BedStatus::Terisi => "Terisi",
+            BedStatus::Kosong => "Kosong",
+            BedStatus::Dibersihkan => "Dibersihkan",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WardBed {
+    /// Mis. `3A-01`.
+    pub id: String,
+    pub ward_id: String,
+    /// Mis. `3A`.
+    pub room: String,
+    /// Mis. `01`.
+    pub bed_no: String,
+    pub status: BedStatus,
+    pub updated_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AdmissionStatus {
+    Dirawat,
+    Pulang,
+    Dirujuk,
+}
+
+impl AdmissionStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            AdmissionStatus::Dirawat => "Dirawat",
+            AdmissionStatus::Pulang => "Pulang",
+            AdmissionStatus::Dirujuk => "Dirujuk",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Admission {
+    /// Mis. `ADM-20261119-001`.
+    pub id: String,
+    pub patient_id: String,
+    pub bed_id: String,
+    pub encounter_id: Option<String>,
+    /// ICD-10.
+    pub diagnosis_code: String,
+    pub diagnosis_display: String,
+    pub admitted_date: NaiveDate,
+    /// Dokter penanggung jawab pasien.
+    pub dpjp: String,
+    /// 1 = Risiko Jatuh.
+    pub fall_risk: bool,
+    pub status: AdmissionStatus,
+    pub discharged_at: Option<NaiveDateTime>,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CareNote {
+    /// Mis. `CRN-000001`.
+    pub id: String,
+    pub admission_id: String,
+    pub note: String,
+    pub recorded_by: String,
+    pub recorded_at: NaiveDateTime,
+}
+
+// --- Kamar operasi & bersalin ----------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SurgeryStatus {
+    Terjadwal,
+    Menunggu,
+    Siap,
+    Berjalan,
+    Selesai,
+    Batal,
+}
+
+impl SurgeryStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            SurgeryStatus::Terjadwal => "Terjadwal",
+            SurgeryStatus::Menunggu => "Menunggu",
+            SurgeryStatus::Siap => "Siap",
+            SurgeryStatus::Berjalan => "Berjalan",
+            SurgeryStatus::Selesai => "Selesai",
+            SurgeryStatus::Batal => "Batal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Surgery {
+    /// Mis. `OK-20261119-001`.
+    pub id: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    /// Mis. `OK 1`.
+    pub room: String,
+    pub procedure: String,
+    /// ICD-9-CM, mis. `47.0`.
+    pub procedure_code: String,
+    pub operator: String,
+    /// Teks tim, mis. `dr. Budi, Sp.B · dr. Ani, Sp.An · 2 perawat`.
+    pub team: String,
+    pub scheduled_at: NaiveDateTime,
+    pub status: SurgeryStatus,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeliveryRoom {
+    /// Mis. `VK 1`.
+    pub id: String,
+    pub status: BedStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Delivery {
+    /// Mis. `VK-20261119-001`.
+    pub id: String,
+    pub patient_id: String,
+    pub age_years: i64,
+    /// Mis. `G2P1`.
+    pub gravida_para: String,
+    /// Pembukaan (cm).
+    pub dilation_cm: i64,
+    /// DJJ (x/mnt).
+    pub fetal_heart_rate: i64,
+    pub midwife: String,
+    pub doctor: String,
+    /// Rencana persalinan.
+    pub plan: String,
+    /// Mis. `VK 2`.
+    pub room: String,
+    /// `Aktif` / `Selesai` / `Dirujuk` (teks bebas; lihat
+    /// `Db::set_delivery_status` — `Selesai` membebaskan ruang).
+    pub status: String,
+    pub created_at: NaiveDateTime,
+}
+
+// --- Laboratorium ----------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabOrderStatus {
+    Menunggu,
+    Proses,
+    Selesai,
+    Kritis,
+}
+
+impl LabOrderStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            LabOrderStatus::Menunggu => "Menunggu",
+            LabOrderStatus::Proses => "Proses",
+            LabOrderStatus::Selesai => "Selesai",
+            LabOrderStatus::Kritis => "Kritis",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabOrder {
+    /// Mis. `LAB-2210` (tanpa tanggal, sesuai desain).
+    pub id: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    pub test_name: String,
+    pub loinc: String,
+    /// Asal order, mis. `Poli Umum` / `IGD` / `Mawar`.
+    pub ordered_from: String,
+    pub ordered_by: String,
+    pub status: LabOrderStatus,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabFlag {
+    Normal,
+    Tinggi,
+    Rendah,
+    Kritis,
+}
+
+impl LabFlag {
+    pub fn label(&self) -> &'static str {
+        match self {
+            LabFlag::Normal => "Normal",
+            LabFlag::Tinggi => "Tinggi",
+            LabFlag::Rendah => "Rendah",
+            LabFlag::Kritis => "Kritis",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabResult {
+    /// Mis. `LBR-000001`.
+    pub id: String,
+    pub order_id: String,
+    pub analyte: String,
+    pub loinc: Option<String>,
+    pub value_text: String,
+    pub unit: String,
+    /// Teks nilai rujukan, mis. `13,0–17,0`.
+    pub ref_text: String,
+    pub ref_low: Option<f64>,
+    pub ref_high: Option<f64>,
+    pub critical_high: Option<f64>,
+    pub critical_low: Option<f64>,
+    pub flag: LabFlag,
+    pub created_at: NaiveDateTime,
+}
+
+// --- Radiologi -------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RadOrderStatus {
+    Menunggu,
+    Proses,
+    Selesai,
+}
+
+impl RadOrderStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            RadOrderStatus::Menunggu => "Menunggu",
+            RadOrderStatus::Proses => "Proses",
+            RadOrderStatus::Selesai => "Selesai",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadOrder {
+    /// Mis. `RAD-0911` (tanpa tanggal, sesuai desain).
+    pub id: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    /// X-Ray / USG / CT Scan / MRI.
+    pub modality: String,
+    /// Mis. `Thorax AP`.
+    pub area: String,
+    pub ordered_from: String,
+    pub ordered_by: String,
+    pub status: RadOrderStatus,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadReport {
+    /// Mis. `RDR-000001`.
+    pub id: String,
+    pub order_id: String,
+    pub findings: String,
+    pub radiologist: String,
+    pub reported_at: NaiveDateTime,
 }

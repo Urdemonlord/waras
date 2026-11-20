@@ -23,6 +23,12 @@ pub enum WarasError {
     #[error("konflik: {0}")]
     Conflict(String),
 
+    #[error("pasien salah: {0}")]
+    WrongPatient(String),
+
+    #[error("tidak dapat diproses: {0}")]
+    Unprocessable(String),
+
     #[error("basis data: {0}")]
     Database(String),
 
@@ -37,6 +43,8 @@ impl WarasError {
             WarasError::NotFound(_) => 404,
             WarasError::Validation(_) => 400,
             WarasError::Blocked(_) => 422,
+            WarasError::WrongPatient(_) => 422,
+            WarasError::Unprocessable(_) => 422,
             WarasError::Unauthorized => 401,
             WarasError::Forbidden(_) => 403,
             WarasError::Conflict(_) => 409,
