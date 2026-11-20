@@ -293,6 +293,7 @@ didokumentasikan):
   PostgreSQL (skema sama, DDL terpisah di `migrations-pg/`);
   `/api/health` mengembalikan `mode: "postgres"`, footer UI
   "Mode Rumah Sakit · PostgreSQL". SQLite tetap default.
+  Dibuktikan di PG 16 nyata (Fase A, A2 — lihat `docs/FASE-A-A2.md`).
 - **Validasi pasien salah**: semua tulis klinis yang membawa
   `patient_id` + `encounter_id` dicocokkan di server — tidak cocok →
   422 `WRONG_PATIENT`. Form tulis menampilkan konfirmasi
@@ -350,9 +351,13 @@ Fase 4 menuntaskan semua modul yang masih `segera` di sidebar
 
 - **Aksesibilitas keyboard + layout responsif**: tetap nice-to-have,
   belum dibangun (dicatat di `docs/FASE4.md` §8).
-- **Migrasi PostgreSQL 0006 belum dieksekusi di Postgres nyata**
-  (sama seperti 0005 di Fase 3): mode Postgres tidak boleh dipakai
-  produksi sebelum boot Postgres dibuktikan.
+- **Mode PostgreSQL dibuktikan (Fase A, A2, 21 Nov 2026):** migrasi
+  0001–0006, seed, boot HTTP (`mode: "postgres"`), seluruh test
+  suite, dan uji beban 20 pengguna (200/200 tulis) di PostgreSQL
+  16 nyata — lihat `docs/FASE-A-A2.md`. Tiga bug ditemukan dan
+  diperbaiki: `SUM(amount)` → Numeric (dasbor 500), pencarian pasien
+  case-sensitive (`LIKE` → `LOWER()`), dan tabrakan PK saat tulis
+  bersamaan (alokasi id kini diserialisasi `Db::alloc_lock`).
 - **E-Klaim**: tidak ada endpoint pengiriman (lihat Fase 3 di atas).
 - **BPJS live**: adapter dibangun + terverifikasi stub; butuh
   kredensial Dev dari faskes mitra JKN (lihat Fase 2 di atas).

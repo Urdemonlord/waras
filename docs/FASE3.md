@@ -583,3 +583,28 @@ Footer UI: "Mode Rumah Sakit · PostgreSQL" bila Postgres,
   tetap harus dibuktikan di PG sebelum deploy mode Postgres.
 - Tes `connect_postgres_refused_is_error_not_panic` hanya
   membuktikan penolakan koneksi jadi error, bukan koneksi sukses.
+
+## 10.5 Pembuktian mode PostgreSQL (Fase A, A2 — 21 Nov 2026)
+
+Semua yang di §10.4 masih "TIDAK terverifikasi" kini dibuktikan di
+PostgreSQL 16.15 nyata (sandbox, branch `a2-postgres`); detail
+lengkap di `docs/FASE-A-A2.md`:
+- Migrasi 0001–0006 di PG nyata (termasuk 0005/0006), seed Fase 1–4
+  (14 pasien, 6 pengguna), boot HTTP `mode: "postgres"`, login, dan
+  alur tulis Fase 3 penuh (triase, admisi, lab → hasil kritis,
+  radiologi, casemix) — 15/15 langkah curl PASS.
+- Cabang `ON CONFLICT (idempotency_key) DO NOTHING` di
+  `enqueue_outbox` dieksekusi di PG nyata (test idempotensi outbox,
+  bagian dari suite PG).
+- Seluruh test suite jalan di kedua backend (satu suite, helper
+  `Db::connect_for_tests()`): SQLite 228 lolos / 0 gagal;
+  Postgres — lihat `docs/FASE-A-A2.md` §4 untuk hitungan final.
+- Tiga bug ditemukan lewat PG dan diperbaiki: `SUM(amount)` →
+  Numeric (dasbor 500), pencarian pasien case-sensitive, tabrakan
+  PK saat tulis bersamaan (alokasi id diserialisasi
+  `Db::alloc_lock`). Uji beban 20 pengguna: 200/200 tulis.
+- CATATAN: data dir PG sandbox (`/var/lib/postgresql`) TIDAK
+  persisten — cluster pertama hilang saat VM diganti 21 Nov ~21:45
+  WIB; pemulihan via `.fase-a-scratch/reinstall-pg.sh` + boot
+  ulang (seed otomatis). Koordinator: jangan anggap server PG
+  sandbox selalu ada; cek `pg_lsclusters` dulu.

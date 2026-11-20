@@ -91,11 +91,22 @@ writer hal ini jarang terlihat; di PG (pool 5 koneksi) 20 penulis
 bersamaan menghitung id yang sama. Uji beban pertama: 59/100 ambil
 antrean + 61/100 resep gagal 500 `duplicate key value violates
 unique constraint "queue_entries_pkey"` (terbukti verbatim dari
-bodi respons). Perbaiki dengan retry maks 5x pada pelanggaran
-unique saja (helper `is_unique_violation_msg` di `lib.rs`: pesan PG
-`duplicate key value violates unique constraint` / SQLite `UNIQUE
-constraint failed`); error lain diteruskan. Setelah perbaikan,
-uji beban ulang §3.
+bodi respons).
+Perbaikan bertahap:
+(a) retry maks 5x pada pelanggaran unique saja (helper
+`is_unique_violation_msg` di `lib.rs`: pesan PG `duplicate key
+value violates unique constraint` / SQLite `UNIQUE constraint
+failed`); error lain diteruskan. Hasil: 91/100 + 91/100 — membaik
+tapi belum tuntas, karena 20 thread tersinkron: tiap ronde retry
+hanya 1 yang lolos, jadi butuh ~20 ronde, bukan 5.
+(b) Perbaiki di akar: `Db` kini membawa `alloc_lock`
+(`Arc<tokio::sync::Mutex<()>>`) yang dipegang `take_queue_once` /
+`prescribe_as_once` / `enqueue_outbox_once` selama hitung-max +
+INSERT (+ audit resep), sehingga alokasi id atomik antar task dalam
+satu proses. Retry 5x tetap ada sebagai jaring pengaman untuk
+tabrakan antar proses. Tidak pernah bersarang (`log_audit` tidak
+mengambil kunci ini); worker outbox + API berbagi `Db` yang sama
+(`Arc`) jadi berbagi kunci yang sama. Hasil: 200/200 (§3).
 
 ## 3. Uji beban (20 pengguna bersamaan, server :3102, DB waras_pg)
 
@@ -107,7 +118,13 @@ Skrip `~/workspace/waras/.fase-a-scratch/a2-pg-load.py`: 20 thread ×
   (22,2 tulis/detik); p50 queue 589 ms, p95 2187 ms, max 2509 ms;
   p50 resep 702 ms, p95 1393 ms, max 1422 ms. Latensi terukur saat
   CPU sandbox berbagi dengan agen lain (bukan angka batas bersih).
-- SESUDAH perbaikan §2.3: (angka diisi setelah run ulang — TODO)
+- Setelah retry 5x saja: queue 91/100, resep 91/100 (9× HTTP 500
+  tiap jenis, masih pelanggaran PK), 200 tulis / 13,4 dtk.
+- SESUDAH `alloc_lock` (§2.3b): **queue 100/100, resep 100/100,
+  200 tulis / 5,0 dtk (40,0 tulis/detik)**; p50 queue 281 ms,
+  p95 1462 ms, max 1603 ms; p50 resep 506 ms, p95 607 ms,
+  max 677 ms. Latensi tetap terukur saat CPU sandbox berbagi
+  dengan agen lain (bukan angka batas bersih).
 
 Catatan: angka di atas BUKAN batas kapasitas (Fase C/C2 yang
 mengukur itu). Yang dibuktikan di sini: tidak ada lagi 500 akibat
