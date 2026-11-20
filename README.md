@@ -67,6 +67,27 @@ lahir saja tidak bisa masuk. Pasien baru dari registrasi belum punya
 kata sandi portal (lihat `docs/FASE-A-A4.md` — belum ada endpoint
 set/ganti kata sandi portal).
 
+## Operasional (backup & restore)
+
+Mode SQLite (default) dicadangkan harian secara otomatis — runbook
+lengkapnya di [`docs/BACKUP.md`](docs/BACKUP.md):
+
+```sh
+# Backup sekali jalan (aman walau server berjalan):
+WARAS_DB=/opt/waras/waras.db WARAS_BACKUP_DIR=/var/backups/waras \
+    scripts/waras-backup.sh
+# Restore satu perintah (hentikan dulu service WARAS):
+sudo systemctl stop waras
+WARAS_DB=/opt/waras/waras.db \
+    scripts/waras-restore.sh /var/backups/waras/waras-20261121-023000.db
+sudo systemctl start waras
+```
+
+Penjadwalan utama: systemd timer `scripts/waras-backup.timer`
+(02:30 tiap hari, retensi 7 backup terakhir); alternatif cron ada di
+runbook. Latihan restore sudah dilakukan 21 Nov 2026 (lihat
+`docs/BACKUP.md` § Latihan restore) — ulangi tiap bulan.
+
 ## Yang sudah dibangun (Fase 1)
 
 - **Satu Cargo workspace, satu binary** (`waras`): Tokio + Axum + SQLx +
