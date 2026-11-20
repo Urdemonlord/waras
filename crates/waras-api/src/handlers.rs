@@ -545,6 +545,9 @@ pub struct AddVitalDto {
     pub measured_by: String,
     pub previous_value: Option<String>,
     pub previous_date: Option<NaiveDate>,
+    /// Opsional (FASE3.md §6): bila diisi, harus cocok dengan pasien
+    /// encounter ini, kalau tidak 422 WRONG_PATIENT.
+    pub patient_id: Option<String>,
 }
 
 pub async fn add_vital(
@@ -558,6 +561,11 @@ pub async fn add_vital(
     non_empty(&body.measured_by, "measured_by")?;
     let code = parse_vital_code(&body.code)
         .ok_or_else(|| ApiError::validation(format!("kode vital tidak dikenal: {}", body.code)))?;
+    // FASE3.md §6: bila body membawa patient_id, cocokkan dengan pasien
+    // encounter (tidak cocok -> 422 WRONG_PATIENT).
+    if let Some(pid) = body.patient_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        state.db.verify_encounter_patient(&id, pid).await?;
+    }
     let obs = state
         .db
         .add_vital(
@@ -601,6 +609,9 @@ pub struct AddConditionDto {
     pub display: String,
     pub status: String,
     pub clinician: String,
+    /// Opsional (FASE3.md §6): bila diisi, harus cocok dengan pasien
+    /// encounter ini, kalau tidak 422 WRONG_PATIENT.
+    pub patient_id: Option<String>,
 }
 
 pub async fn add_condition(
@@ -619,6 +630,11 @@ pub async fn add_condition(
     let status = parse_condition_status(&body.status).ok_or_else(|| {
         ApiError::validation(format!("status diagnosis tidak dikenal: {}", body.status))
     })?;
+    // FASE3.md §6: bila body membawa patient_id, cocokkan dengan pasien
+    // encounter (tidak cocok -> 422 WRONG_PATIENT).
+    if let Some(pid) = body.patient_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        state.db.verify_encounter_patient(&id, pid).await?;
+    }
     let encounter = state
         .db
         .get_encounter(&id)
@@ -768,12 +784,32 @@ pub async fn list_prescriptions(
     ))
 }
 
+/// Body resep: `NewPrescription` (KONTRAK §3) + `patient_id` opsional
+/// (FASE3.md §6): bila diisi, harus cocok dengan pasien encounter ini,
+/// kalau tidak 422 WRONG_PATIENT. Format wire tidak berubah.
+#[derive(Deserialize)]
+pub struct CreatePrescriptionDto {
+    #[serde(flatten)]
+    pub rx: NewPrescription,
+    pub patient_id: Option<String>,
+}
+
 pub async fn create_prescription(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
-    JsonBody(body): JsonBody<NewPrescription>,
+    JsonBody(dto): JsonBody<CreatePrescriptionDto>,
 ) -> ApiResult<(StatusCode, Json<waras_core::types::MedicationRequest>)> {
     require(&user, Action::Prescribe)?;
+    let patient_id = dto.patient_id;
+    let body = dto.rx;
+    // FASE3.md §6: bila body membawa patient_id, cocokkan dengan pasien
+    // encounter (tidak cocok -> 422 WRONG_PATIENT).
+    if let Some(pid) = patient_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        state
+            .db
+            .verify_encounter_patient(&body.encounter_id, pid)
+            .await?;
+    }
     non_empty(&body.encounter_id, "encounter_id")?;
     non_empty(&body.drug_name, "drug_name")?;
     non_empty(&body.drug_class, "drug_class")?;

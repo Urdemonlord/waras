@@ -12,6 +12,7 @@
 pub mod auth;
 pub mod bridge_handlers;
 pub mod error;
+pub mod fase3_handlers;
 pub mod handlers;
 pub mod parse;
 pub mod web;
@@ -155,6 +156,100 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/api/satusehat/resources",
             get(bridge_handlers::satusehat_resources),
+        )
+        // -- Rumah sakit Fase 3 (FASE3.md §5) -----------------------------
+        .route("/api/igd", get(fase3_handlers::list_igd))
+        .route("/api/igd/triage", post(fase3_handlers::create_triage))
+        .route("/api/igd/{id}", get(fase3_handlers::get_igd))
+        .route(
+            "/api/igd/{id}/status",
+            post(fase3_handlers::set_igd_status),
+        )
+        .route(
+            "/api/igd/{id}/observations",
+            post(fase3_handlers::add_igd_observation),
+        )
+        .route("/api/ranap/beds", get(fase3_handlers::list_beds))
+        .route(
+            "/api/ranap/admissions",
+            get(fase3_handlers::list_admissions).post(fase3_handlers::create_admission),
+        )
+        .route(
+            "/api/ranap/admissions/{id}",
+            get(fase3_handlers::get_admission),
+        )
+        .route(
+            "/api/ranap/admissions/{id}/discharge",
+            post(fase3_handlers::discharge_admission),
+        )
+        .route(
+            "/api/ranap/admissions/{id}/transfer",
+            post(fase3_handlers::transfer_admission),
+        )
+        .route(
+            "/api/ranap/admissions/{id}/notes",
+            post(fase3_handlers::add_care_note),
+        )
+        .route(
+            "/api/operasi",
+            get(fase3_handlers::list_operasi).post(fase3_handlers::create_surgery),
+        )
+        .route(
+            "/api/operasi/{id}/status",
+            post(fase3_handlers::set_surgery_status),
+        )
+        .route(
+            "/api/bersalin",
+            get(fase3_handlers::list_bersalin).post(fase3_handlers::create_delivery),
+        )
+        .route(
+            "/api/bersalin/{id}/status",
+            post(fase3_handlers::set_delivery_status),
+        )
+        .route(
+            "/api/lab/orders",
+            get(fase3_handlers::list_lab_orders).post(fase3_handlers::create_lab_order),
+        )
+        .route("/api/lab/orders/{id}", get(fase3_handlers::get_lab_order))
+        .route(
+            "/api/lab/orders/{id}/results",
+            post(fase3_handlers::add_lab_results),
+        )
+        .route(
+            "/api/lab/orders/{id}/status",
+            post(fase3_handlers::set_lab_order_status),
+        )
+        .route(
+            "/api/radiologi/orders",
+            get(fase3_handlers::list_rad_orders).post(fase3_handlers::create_rad_order),
+        )
+        .route(
+            "/api/radiologi/orders/{id}",
+            get(fase3_handlers::get_rad_order),
+        )
+        .route(
+            "/api/radiologi/orders/{id}/report",
+            post(fase3_handlers::save_rad_report),
+        )
+        .route(
+            "/api/radiologi/orders/{id}/status",
+            post(fase3_handlers::set_rad_order_status),
+        )
+        .route(
+            "/api/casemix",
+            get(fase3_handlers::list_casemix),
+        )
+        .route(
+            "/api/casemix/group",
+            post(fase3_handlers::group_casemix),
+        )
+        .route(
+            "/api/casemix/{id}",
+            get(fase3_handlers::get_casemix_claim),
+        )
+        .route(
+            "/api/casemix/{id}/export",
+            get(fase3_handlers::export_casemix_claim),
         )
         // -- UI statis (waras-web, rust-embed) ----------------------------
         .route("/", get(web::serve_index))

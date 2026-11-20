@@ -509,7 +509,9 @@ async fn full_flow_patient_queue_encounter_vital_soap() {
     let app = seeded_app().await;
     let dokter = login_as(&app, "ahmad").await;
 
-    // 1. Pasien baru -> RM-000822.
+    // 1. Pasien baru (id RM berikutnya — bukan hardcode, karena seed
+    // Fase 3 menambah RM-000822/RM-000823 sehingga pasien baru di sini
+    // jadi RM-000824).
     let (s, v, _) = call(
         app.clone(),
         req(
@@ -525,7 +527,8 @@ async fn full_flow_patient_queue_encounter_vital_soap() {
     )
     .await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
-    assert_eq!(v["id"], "RM-000822");
+    let patient_id = v["id"].as_str().unwrap().to_string();
+    assert!(patient_id.starts_with("RM-"), "{patient_id}");
 
     // 2. Ambil antrean -> A-045.
     let (s, v, _) = call(
@@ -535,7 +538,7 @@ async fn full_flow_patient_queue_encounter_vital_soap() {
             "/api/queue/take",
             Some(&dokter),
             Some(json!({
-                "patient_id": "RM-000822",
+                "patient_id": patient_id,
                 "poli": "Poli Umum",
                 "doctor": "dr. Ahmad Hidayat",
             })),
@@ -564,7 +567,7 @@ async fn full_flow_patient_queue_encounter_vital_soap() {
             "/api/encounters",
             Some(&dokter),
             Some(json!({
-                "patient_id": "RM-000822",
+                "patient_id": patient_id,
                 "poli": "Poli Umum",
                 "doctor_name": "dr. Ahmad Hidayat",
                 "doctor_id": "U-001",
@@ -1157,7 +1160,9 @@ async fn fase1_handlers_enqueue_satusehat_jobs() {
     )
     .await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
-    assert_eq!(v["id"], "RM-000822");
+    // Id RM berikutnya (lihat komentar di atas: bukan hardcode RM-000822).
+    let patient_id = v["id"].as_str().unwrap().to_string();
+    assert!(patient_id.starts_with("RM-"), "{patient_id}");
     // Encounter + vital + diagnosis + resep (lolos safety) -> 3 job lagi.
     let (s, v, _) = call(
         app.clone(),
@@ -1166,7 +1171,7 @@ async fn fase1_handlers_enqueue_satusehat_jobs() {
             "/api/encounters",
             Some(&token),
             Some(json!({
-                "patient_id": "RM-000822", "poli": "Poli Umum",
+                "patient_id": patient_id, "poli": "Poli Umum",
                 "doctor_name": "dr. Ahmad Hidayat",
             })),
         ),
@@ -1966,4 +1971,1034 @@ async fn antrean_sync_and_beds_refresh_via_stub_bpjs() {
         .requests()
         .iter()
         .any(|(_, p, _)| p.contains("rest/bed/read/1234567/1/100")));
+}
+
+// ---------------------------------------------------------------------------
+// Fase 3: rumah sakit (FASE3.md §5-§6)
+// ---------------------------------------------------------------------------
+
+/// Id bed berstatus Kosong (dari GET /api/ranap/beds).
+async fn free_bed_ids(app: &Router, token: &str) -> Vec<String> {
+    let (s, v, _) = call(
+        app.clone(),
+        req("GET", "/api/ranap/beds", Some(token), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let mut ids = Vec::new();
+    for ward in v.as_array().expect("array ward") {
+        for bed in ward["beds"].as_array().expect("array bed") {
+            if bed["status"] == "kosong" {
+                ids.push(bed["id"].as_str().unwrap().to_string());
+            }
+        }
+    }
+    ids
+}
+
+/// Satu ruang bersalin berstatus Kosong (dari GET /api/bersalin).
+async fn free_delivery_room(app: &Router, token: &str) -> String {
+    let (s, v, _) = call(
+        app.clone(),
+        req("GET", "/api/bersalin", Some(token), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    v["rooms"]
+        .as_array()
+        .expect("array rooms")
+        .iter()
+        .find(|r| r["status"] == "kosong")
+        .and_then(|r| r["id"].as_str())
+        .expect("ada ruang bersalin Kosong")
+        .to_string()
+}
+
+async fn create_encounter_for(app: &Router, token: &str, patient_id: &str) -> String {
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/encounters",
+            Some(token),
+            Some(json!({
+                "patient_id": patient_id,
+                "poli": "Poli Umum",
+                "doctor_name": "dr. Ahmad Hidayat",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    v["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn fase3_igd_triage_status_and_observation() {
+    let app = seeded_app().await;
+    let dokter = login_as(&app, "ahmad").await;
+
+    let (s, v, _) = call(
+        app.clone(),
+        req("GET", "/api/igd", Some(&dokter), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let merah_before = v["counts"]["merah"].as_i64().unwrap();
+
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/igd/triage",
+            Some(&dokter),
+            Some(json!({
+                "patient_id": "RM-000812",
+                "complaint": "Nyeri dada, sesak",
+                "triage": "merah",
+                "doctor": "dr. Andi Wijaya",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert!(v["id"].as_str().unwrap().starts_with("IGD-20261119-"), "{}", v["id"]);
+    assert_eq!(v["status"], "menunggu");
+    assert_eq!(v["triage"], "merah");
+    let igd_id = v["id"].as_str().unwrap().to_string();
+
+    let (s, v, _) = call(
+        app.clone(),
+        req("GET", "/api/igd", Some(&dokter), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["counts"]["merah"], merah_before + 1);
+    assert!(v["visits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|x| x["id"] == igd_id));
+
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            &format!("/api/igd/{igd_id}/status"),
+            Some(&dokter),
+            Some(json!({"status": "observasi"})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "observasi");
+
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            &format!("/api/igd/{igd_id}/observations"),
+            Some(&dokter),
+            Some(json!({"note": "TD 150/95 · Nadi 104 · SpO2 96%."})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["note"], "TD 150/95 · Nadi 104 · SpO2 96%.");
+
+    let (s, v, _) = call(
+        app.clone(),
+        req("GET", &format!("/api/igd/{igd_id}"), Some(&dokter), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["observations"].as_array().map(|a| a.len()), Some(1));
+
+    // Triase tidak dikenal -> 400.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/igd/triage",
+            Some(&dokter),
+            Some(json!({
+                "patient_id": "RM-000812", "complaint": "Batuk",
+                "triage": "biru", "doctor": "dr. Ahmad Hidayat",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+}
+
+#[tokio::test]
+async fn fase3_ranap_admission_transfer_discharge() {
+    let app = seeded_app().await;
+    let perawat = login_as(&app, "sari").await;
+
+    let free = free_bed_ids(&app, &perawat).await;
+    assert!(free.len() >= 2, "butuh minimal 2 bed Kosong, dapat {}", free.len());
+    let (bed1, bed2) = (free[0].clone(), free[1].clone());
+
+    // Admisi -> bed Terisi.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/ranap/admissions",
+            Some(&perawat),
+            Some(json!({
+                "patient_id": "RM-000812", "bed_id": bed1,
+                "encounter_id": ENC_SITI,
+                "diagnosis_code": "I20.9",
+                "diagnosis_display": "Angina pektoris",
+                "dpjp": "dr. Rina, Sp.PD", "fall_risk": true,
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["status"], "dirawat");
+    assert_eq!(v["patient_name"], "Siti Rahmawati");
+    assert_eq!(v["bed"]["status"], "terisi");
+    assert_eq!(v["fall_risk"], true);
+    let adm_id = v["id"].as_str().unwrap().to_string();
+
+    // Bed yang sama tidak bisa dipakai admisi kedua -> 422.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/ranap/admissions",
+            Some(&perawat),
+            Some(json!({
+                "patient_id": "RM-000813", "bed_id": bed1,
+                "diagnosis_code": "J06.9",
+                "diagnosis_display": "ISPA atas",
+                "dpjp": "dr. Ahmad Hidayat",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+
+    // Mutasi -> bed lama Dibersihkan, bed baru Terisi.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            &format!("/api/ranap/admissions/{adm_id}/transfer"),
+            Some(&perawat),
+            Some(json!({"bed_id": bed2})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["bed_id"], bed2);
+    assert_eq!(v["bed"]["status"], "terisi");
+    let beds = free_bed_ids(&app, &perawat).await;
+    assert!(!beds.contains(&bed2), "bed baru harus Terisi");
+    let (s, v, _) = call(
+        app.clone(),
+        req("GET", "/api/ranap/beds", Some(&perawat), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let bed_status = |id: &str| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|w| w["beds"].as_array().unwrap().clone())
+            .find(|b| b["id"] == id)
+            .map(|b| b["status"].as_str().unwrap().to_string())
+    };
+    assert_eq!(bed_status(&bed1).as_deref(), Some("dibersihkan"));
+    assert_eq!(bed_status(&bed2).as_deref(), Some("terisi"));
+
+    // Catatan perawatan.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            &format!("/api/ranap/admissions/{adm_id}/notes"),
+            Some(&perawat),
+            Some(json!({"note": "Nyeri dada berkurang."})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "GET",
+            &format!("/api/ranap/admissions/{adm_id}"),
+            Some(&perawat),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["care_notes"].as_array().map(|a| a.len()), Some(1));
+    assert_eq!(v["care_notes"][0]["note"], "Nyeri dada berkurang.");
+
+    // Pulang -> bed Dibersihkan.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            &format!("/api/ranap/admissions/{adm_id}/discharge"),
+            Some(&perawat),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "pulang");
+    let (s, v, _) = call(
+        app.clone(),
+        req("GET", "/api/ranap/beds", Some(&perawat), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let bed_status = |id: &str| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|w| w["beds"].as_array().unwrap().clone())
+            .find(|b| b["id"] == id)
+            .map(|b| b["status"].as_str().unwrap().to_string())
+    };
+    assert_eq!(bed_status(&bed2).as_deref(), Some("dibersihkan"));
+
+    // Filter status: yang sudah pulang tidak muncul di Dirawat.
+    let (s, v, _) = call(
+        app,
+        req(
+            "GET",
+            "/api/ranap/admissions?status=dirawat",
+            Some(&perawat),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|a| a["status"] == "dirawat" && a["id"] != adm_id));
+}
+
+#[tokio::test]
+async fn fase3_operasi_create_and_status() {
+    let app = seeded_app().await;
+    let dokter = login_as(&app, "ahmad").await;
+
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/operasi",
+            Some(&dokter),
+            Some(json!({
+                "patient_id": "RM-000821",
+                "room": "OK 1",
+                "procedure": "Apendektomi",
+                "procedure_code": "47.0",
+                "operator": "dr. Budi, Sp.B",
+                "team": "dr. Budi, Sp.B · dr. Ani, Sp.An · 2 perawat",
+                "scheduled_at": "2026-11-19 11:00",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert!(v["id"].as_str().unwrap().starts_with("OK-20261119-"), "{}", v["id"]);
+    assert_eq!(v["status"], "terjadwal");
+    let op_id = v["id"].as_str().unwrap().to_string();
+
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            &format!("/api/operasi/{op_id}/status"),
+            Some(&dokter),
+            Some(json!({"status": "siap"})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "siap");
+
+    let (s, v, _) = call(
+        app.clone(),
+        req("GET", "/api/operasi", Some(&dokter), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["surgeries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|x| x["id"] == op_id));
+    assert!(v["deliveries"].is_array());
+    assert!(v["delivery_rooms"].is_array());
+}
+
+#[tokio::test]
+async fn fase3_bersalin_create_status_and_room_conflict() {
+    let app = seeded_app().await;
+    let dokter = login_as(&app, "ahmad").await;
+
+    let room = free_delivery_room(&app, &dokter).await;
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/bersalin",
+            Some(&dokter),
+            Some(json!({
+                "patient_id": "RM-000816",
+                "age_years": 34,
+                "gravida_para": "G2P1",
+                "dilation_cm": 6,
+                "fetal_heart_rate": 140,
+                "midwife": "Bidan Sari",
+                "doctor": "dr. Maya, Sp.OG",
+                "plan": "Persalinan pervaginam, siaga seksio sesarea",
+                "room": room,
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    // Status persalinan disimpan bentuk tampilan ("Aktif", FASE3.md §1).
+    assert_eq!(v["status"], "Aktif");
+    let del_id = v["id"].as_str().unwrap().to_string();
+
+    // Ruang kini Terisi: persalinan kedua di ruang sama -> 422.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/bersalin",
+            Some(&dokter),
+            Some(json!({
+                "patient_id": "RM-000819",
+                "age_years": 32,
+                "gravida_para": "G1P0",
+                "dilation_cm": 4,
+                "fetal_heart_rate": 138,
+                "midwife": "Bidan Sari",
+                "doctor": "dr. Maya, Sp.OG",
+                "plan": "Observasi",
+                "room": room,
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+
+    // Selesai -> ruang kembali Kosong.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            &format!("/api/bersalin/{del_id}/status"),
+            Some(&dokter),
+            Some(json!({"status": "selesai"})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "Selesai");
+    assert_eq!(free_delivery_room(&app, &dokter).await, room);
+}
+
+#[tokio::test]
+async fn fase3_lab_order_results_critical() {
+    let app = seeded_app().await;
+    let perawat = login_as(&app, "sari").await;
+    let dokter = login_as(&app, "ahmad").await;
+
+    // loinc kosong -> diisi dari tabel LOINC (Troponin I = 10839-9).
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/lab/orders",
+            Some(&perawat),
+            Some(json!({
+                "patient_id": "RM-000820",
+                "test_name": "Troponin I",
+                "loinc": "",
+                "ordered_from": "IGD",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["loinc"], "10839-9");
+    assert_eq!(v["status"], "menunggu");
+    assert_eq!(v["patient_name"], "Bambang Riyanto");
+    let order_id = v["id"].as_str().unwrap().to_string();
+
+    // Hasil dengan analit kritis -> order Kritis + notifikasi KRITIS.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            &format!("/api/lab/orders/{order_id}/results"),
+            Some(&dokter),
+            Some(json!({"results": [
+                {
+                    "analyte": "Troponin I", "value_text": "0,42",
+                    "unit": "ng/mL", "ref_text": "< 0,04 ng/mL",
+                    "ref_high": 0.04, "critical_high": 0.04,
+                },
+                {
+                    "analyte": "Hemoglobin", "value_text": "13,8",
+                    "unit": "g/dL", "ref_text": "13,0–17,0",
+                    "ref_low": 13.0, "ref_high": 17.0,
+                },
+            ]})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "kritis");
+    assert_eq!(v["results"].as_array().map(|a| a.len()), Some(2));
+    let troponin = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["analyte"] == "Troponin I")
+        .unwrap();
+    assert_eq!(troponin["flag"], "kritis");
+    let hb = v["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["analyte"] == "Hemoglobin")
+        .unwrap();
+    assert_eq!(hb["flag"], "normal");
+
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "GET",
+            &format!("/api/lab/orders/{order_id}"),
+            Some(&dokter),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["results"].as_array().map(|a| a.len()), Some(2));
+
+    // Notifikasi: 3 seed + 1 KRITIS baru.
+    let (s, v, _) = call(
+        app.clone(),
+        req("GET", "/api/notifications", Some(&dokter), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v.as_array().map(|a| a.len()), Some(4), "{v}");
+    assert_eq!(
+        v.as_array()
+            .unwrap()
+            .iter()
+            .filter(|n| n["kind"] == "kritis")
+            .count(),
+        2,
+        "{v}"
+    );
+
+    // Ubah status manual (endpoint status).
+    let (s, v, _) = call(
+        app,
+        req(
+            "POST",
+            &format!("/api/lab/orders/{order_id}/status"),
+            Some(&dokter),
+            Some(json!({"status": "proses"})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "proses");
+}
+
+#[tokio::test]
+async fn fase3_lab_order_loinc_autofill_and_unknown() {
+    let app = seeded_app().await;
+    let perawat = login_as(&app, "sari").await;
+
+    // Tanpa loinc -> diisi dari nama tes.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/lab/orders",
+            Some(&perawat),
+            Some(json!({
+                "patient_id": "RM-000812",
+                "test_name": "Darah lengkap",
+                "ordered_from": "Poli Umum",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["loinc"], "58410-2");
+
+    // loinc dikenal yang diberikan -> dipakai apa adanya.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/lab/orders",
+            Some(&perawat),
+            Some(json!({
+                "patient_id": "RM-000812",
+                "test_name": "Golongan darah",
+                "loinc": "883-9",
+                "ordered_from": "IGD",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["loinc"], "883-9");
+
+    // Tes tidak dikenal -> 422 "LOINC tidak dikenal".
+    let (s, v, _) = call(
+        app,
+        req(
+            "POST",
+            "/api/lab/orders",
+            Some(&perawat),
+            Some(json!({
+                "patient_id": "RM-000812",
+                "test_name": "Tes fiktif",
+                "ordered_from": "Poli Umum",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap_or("");
+    assert!(msg.contains("LOINC"), "pesan harus menyebut LOINC: {msg}");
+}
+
+#[tokio::test]
+async fn fase3_radiologi_order_report() {
+    let app = seeded_app().await;
+    let perawat = login_as(&app, "sari").await;
+    let dokter = login_as(&app, "ahmad").await;
+
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/radiologi/orders",
+            Some(&perawat),
+            Some(json!({
+                "patient_id": "RM-000817",
+                "modality": "X-Ray",
+                "area": "Thorax AP",
+                "ordered_from": "IGD",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["status"], "menunggu");
+    assert_eq!(v["patient_name"], "Joko Susilo");
+    let order_id = v["id"].as_str().unwrap().to_string();
+
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            &format!("/api/radiologi/orders/{order_id}/report"),
+            Some(&dokter),
+            Some(json!({
+                "findings": "Tidak tampak infiltrat; cor dalam batas normal.",
+                "radiologist": "dr. Andi Wijaya, Sp.Rad",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["findings"], "Tidak tampak infiltrat; cor dalam batas normal.");
+    assert_eq!(v["order"]["status"], "selesai");
+
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "GET",
+            &format!("/api/radiologi/orders/{order_id}"),
+            Some(&dokter),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "selesai");
+    assert_eq!(v["report"]["findings"], "Tidak tampak infiltrat; cor dalam batas normal.");
+
+    // Ubah status manual (endpoint status, peran PesanRadiologi).
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/radiologi/orders",
+            Some(&perawat),
+            Some(json!({
+                "patient_id": "RM-000817",
+                "modality": "USG",
+                "area": "Abdomen",
+                "ordered_from": "Poli Umum",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let order2 = v["id"].as_str().unwrap().to_string();
+    let (s, v, _) = call(
+        app,
+        req(
+            "POST",
+            &format!("/api/radiologi/orders/{order2}/status"),
+            Some(&perawat),
+            Some(json!({"status": "proses"})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["status"], "proses");
+}
+
+#[tokio::test]
+async fn fase3_casemix_group_known_and_unknown() {
+    let app = seeded_app().await;
+    let dokter = login_as(&app, "ahmad").await;
+    let kasir = login_as(&app, "sinta").await;
+
+    // Diagnosis terpetakan (I20.9 -> I-4-13-I, Rp 4.210.000).
+    let enc = create_encounter_for(&app, &dokter, "RM-000812").await;
+    let (s, _, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            &format!("/api/encounters/{enc}/conditions"),
+            Some(&dokter),
+            Some(json!({
+                "group": "utama", "code": "I20.9",
+                "display": "Angina pektoris", "status": "aktif",
+                "clinician": "dr. Ahmad Hidayat",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/casemix/group",
+            Some(&kasir),
+            Some(json!({"encounter_id": enc})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["ina_cbg_code"], "I-4-13-I");
+    assert_eq!(v["amount"], 4_210_000);
+    assert_eq!(v["status"], "draft");
+    assert_eq!(v["code"], "I-4-13-I");
+    assert_eq!(v["tariff_idr"], 4_210_000);
+    let claim_id = v["id"].as_str().unwrap().to_string();
+
+    let (s, v, _) = call(
+        app.clone(),
+        req("GET", "/api/casemix", Some(&kasir), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["kpis"]["total"].as_i64().unwrap() >= 2, "{v}");
+    assert!(v["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["id"] == claim_id));
+
+    let (s, v, _) = call(
+        app.clone(),
+        req("GET", &format!("/api/casemix/{claim_id}"), Some(&kasir), None),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["id"], claim_id);
+
+    // Export: berkas JSON untuk disalin ke aplikasi E-Klaim.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "GET",
+            &format!("/api/casemix/{claim_id}/export"),
+            Some(&kasir),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!(v["ina_cbg_code"], "I-4-13-I");
+    assert_eq!(v["tariff_idr"], 4_210_000);
+    let note = v["catatan_eklaim"].as_str().unwrap_or("");
+    assert!(note.contains("E-Klaim"), "catatan harus menyebut E-Klaim: {note}");
+
+    // Diagnosis tidak terpetakan -> 422, TANPA mengarang kode.
+    let enc2 = create_encounter_for(&app, &dokter, "RM-000813").await;
+    let (s, _, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            &format!("/api/encounters/{enc2}/conditions"),
+            Some(&dokter),
+            Some(json!({
+                "group": "utama", "code": "Z99.9",
+                "display": "Diagnosis fiktif", "status": "aktif",
+                "clinician": "dr. Ahmad Hidayat",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/casemix/group",
+            Some(&kasir),
+            Some(json!({"encounter_id": enc2})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    let msg = v["error"]["message"].as_str().unwrap_or("");
+    assert!(msg.contains("belum terpetakan"), "pesan harus menyebut belum terpetakan: {msg}");
+
+    // Encounter tanpa diagnosis utama -> 422 juga.
+    let enc3 = create_encounter_for(&app, &dokter, "RM-000814").await;
+    let (s, v, _) = call(
+        app,
+        req(
+            "POST",
+            "/api/casemix/group",
+            Some(&kasir),
+            Some(json!({"encounter_id": enc3})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+}
+
+#[tokio::test]
+async fn fase3_wrong_patient_422() {
+    let app = seeded_app().await;
+    let dokter = login_as(&app, "ahmad").await;
+
+    // Encounter milik Budi (RM-000813).
+    let enc_budi = create_encounter_for(&app, &dokter, "RM-000813").await;
+
+    // Triase Fase 3 dengan encounter orang lain -> 422 WRONG_PATIENT.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/igd/triage",
+            Some(&dokter),
+            Some(json!({
+                "patient_id": "RM-000812",
+                "complaint": "Batuk",
+                "triage": "hijau",
+                "doctor": "dr. Ahmad Hidayat",
+                "encounter_id": enc_budi,
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    assert_eq!(v["error"]["code"], "WRONG_PATIENT");
+
+    // Vital dengan patient_id orang lain -> 422 WRONG_PATIENT.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            &format!("/api/encounters/{enc_budi}/vitals"),
+            Some(&dokter),
+            Some(json!({
+                "code": "nadi", "value": "80",
+                "measured_by": "Ns. Sari Wijaya",
+                "patient_id": "RM-000812",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    assert_eq!(v["error"]["code"], "WRONG_PATIENT");
+
+    // Vital dengan patient_id yang cocok -> lolos.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            &format!("/api/encounters/{enc_budi}/vitals"),
+            Some(&dokter),
+            Some(json!({
+                "code": "nadi", "value": "80",
+                "measured_by": "Ns. Sari Wijaya",
+                "patient_id": "RM-000813",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+
+    // Resep dengan patient_id orang lain -> 422 WRONG_PATIENT.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/prescriptions",
+            Some(&dokter),
+            Some(json!({
+                "encounter_id": enc_budi,
+                "patient_id": "RM-000812",
+                "drug_name": "Paracetamol 500 mg",
+                "drug_class": "analgesic",
+                "dosage": "3x1",
+                "duration": "3 hari",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "{v}");
+    assert_eq!(v["error"]["code"], "WRONG_PATIENT");
+
+    // Resep tanpa patient_id -> perilaku lama tetap jalan.
+    let (s, v, _) = call(
+        app,
+        req(
+            "POST",
+            "/api/prescriptions",
+            Some(&dokter),
+            Some(json!({
+                "encounter_id": enc_budi,
+                "drug_name": "Paracetamol 500 mg",
+                "drug_class": "analgesic",
+                "dosage": "3x1",
+                "duration": "3 hari",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+}
+
+#[tokio::test]
+async fn fase3_rbac_403() {
+    let app = seeded_app().await;
+    let kasir = login_as(&app, "sinta").await;
+    let apoteker = login_as(&app, "dina").await;
+    let perawat = login_as(&app, "sari").await;
+    let dokter = login_as(&app, "ahmad").await;
+
+    // Kasir tidak boleh triase IGD.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/igd/triage",
+            Some(&kasir),
+            Some(json!({
+                "patient_id": "RM-000812", "complaint": "Batuk",
+                "triage": "hijau", "doctor": "dr. Ahmad Hidayat",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    assert_eq!(v["error"]["code"], "FORBIDDEN");
+
+    // Apoteker tidak boleh isi hasil lab (dan perawat juga tidak).
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/lab/orders",
+            Some(&perawat),
+            Some(json!({
+                "patient_id": "RM-000812",
+                "test_name": "Darah lengkap",
+                "ordered_from": "Poli Umum",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let order_id = v["id"].as_str().unwrap().to_string();
+    for (token, siapa) in [(&apoteker, "apoteker"), (&perawat, "perawat")] {
+        let (s, v, _) = call(
+            app.clone(),
+            req(
+                "POST",
+                &format!("/api/lab/orders/{order_id}/results"),
+                Some(token),
+                Some(json!({"results": [
+                    {"analyte": "Hemoglobin", "value_text": "14,2", "unit": "g/dL"},
+                ]})),
+            ),
+        )
+        .await;
+        assert_eq!(s, StatusCode::FORBIDDEN, "{siapa}: {v}");
+    }
+
+    // Apoteker tidak boleh buat admisi rawat inap.
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/ranap/admissions",
+            Some(&apoteker),
+            Some(json!({
+                "patient_id": "RM-000812", "bed_id": "3A-01",
+                "diagnosis_code": "I20.9",
+                "diagnosis_display": "Angina pektoris",
+                "dpjp": "dr. Rina, Sp.PD",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+
+    // Perawat BOLEH triase (kontrol positif).
+    let (s, v, _) = call(
+        app,
+        req(
+            "POST",
+            "/api/igd/triage",
+            Some(&perawat),
+            Some(json!({
+                "patient_id": "RM-000812", "complaint": "Demam",
+                "triage": "hijau", "doctor": "dr. Ahmad Hidayat",
+            })),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let _ = dokter;
 }
