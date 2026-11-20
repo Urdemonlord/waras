@@ -1,9 +1,14 @@
-//! Portal pasien (FASE4.md §5.2 + §7).
+//! Portal pasien (FASE4.md §5.2 + §7; kata sandi portal Fase A/A4).
 //!
-//! Login memakai NIK + tanggal lahir — kredensial kelas demo, BUKAN
-//! autentikasi kuat (NIK + tanggal lahir bisa diketahui orang lain).
-//! Untuk produksi, ganti dengan OTP (SMS/WA) atau kata sandi portal
-//! (FASE4.md §7). Token pasien (sesi 12 jam, `sessions.patient_id`
+//! Login memakai NIK + **kata sandi portal** (hash Argon2 di
+//! `patients.portal_password_hash`, seed demo `waras123` — sama
+//! seperti kata sandi seed staf, lihat README). NIK + tanggal lahir
+//! saja TIDAK PERNAH cukup: payload lama `{nik, birth_date}`
+//! ditolak (400, field `password` wajib) dan tanggal lahir sebagai
+//! kata sandi ditolak 401. Tidak ada kanal OTP (tidak ada pengirim
+//! SMS/WA) — kata sandi adalah mekanisme yang dipilih, lihat
+//! `docs/FASE-A-A4.md`.
+//! Token pasien (sesi 12 jam, `sessions.patient_id`
 //! terisi, `user_id` NULL) DITOLAK oleh extractor staf `AuthUser`
 //! karena JOIN ke `users` tidak menemukan baris.
 //!
@@ -13,17 +18,17 @@
 
 use axum::{
     extract::{FromRequestParts, State},
-    http::{header, request::Parts},
+    http::{header, request::Parts, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
-use chrono::NaiveDate;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use waras_core::types::Patient;
-use waras_db::{clinic_today, PrescriptionFilter};
+use waras_db::{clinic_today, Db, PrescriptionFilter};
 
 use crate::{
-    auth::JsonBody,
+    auth::{ClientIp, JsonBody},
     error::ApiError,
     AppState,
 };
@@ -88,25 +93,63 @@ impl FromRequestParts<AppState> for PortalPatient {
 #[derive(Deserialize)]
 pub struct PatientLoginDto {
     pub nik: String,
-    pub birth_date: NaiveDate,
+    pub password: String,
 }
 
-/// `POST /api/auth/patient-login` (publik). NIK/tanggal tidak cocok
-/// -> 401 dengan pesan generik (jangan bocorkan mana yang salah).
+/// `POST /api/auth/patient-login` (publik). NIK + kata sandi portal
+/// (Argon2, pola yang sama dengan login staf). NIK/tanggal lahir
+/// saja TIDAK cukup: field `birth_date` tidak ada lagi di DTO, jadi
+/// payload lama gagal validasi (400); tanggal lahir yang dipakai
+/// sebagai kata sandi gagal verifikasi (401).
+/// Brute-force sama seperti login staf: 5 gagal dalam 15 menit untuk
+/// pasangan IP + NIK yang sama -> 429 + `Retry-After`; satu login
+/// sukses menghapus hitungan. Pesan 401 tetap generik.
 pub async fn patient_login(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     JsonBody(body): JsonBody<PatientLoginDto>,
-) -> ApiResult<Json<Value>> {
-    let patient = state.db.find_patient_by_nik(body.nik.trim()).await?;
-    let patient = match patient {
-        Some(p) if p.birth_date == body.birth_date => p,
-        _ => return Err(ApiError::unauthorized()),
+) -> ApiResult<Response> {
+    let nik = body.nik.trim().to_string();
+    if nik.is_empty() || body.password.is_empty() {
+        return Err(ApiError::validation("NIK dan kata sandi wajib diisi"));
+    }
+    let attempt_key = format!("patient:{ip}:{nik}");
+    if let Some(retry) = state.db.check_login_lockout(&attempt_key).await? {
+        return Ok(ApiError::rate_limited_response(
+            retry as u64,
+            "terlalu banyak percobaan login portal, coba lagi nanti",
+        ));
+    }
+    let patient = state.db.find_patient_by_nik(&nik).await?;
+    let ok = match &patient {
+        Some(p) => match state.db.get_portal_password_hash(&p.id).await? {
+            Some(hash) => Db::verify_password(&hash, &body.password),
+            // Pasien tanpa kata sandi portal (mis. pasien baru dari
+            // registrasi) tidak bisa login portal.
+            None => false,
+        },
+        None => false,
     };
+    if !ok {
+        if let Some(retry) = state.db.record_login_failure(&attempt_key).await? {
+            return Ok(ApiError::rate_limited_response(
+                retry as u64,
+                "terlalu banyak percobaan login portal, coba lagi nanti",
+            ));
+        }
+        return Err(ApiError::unauthorized());
+    }
+    let patient = patient.expect("pasien ada bila verifikasi lolos");
+    let _ = state.db.clear_login_attempts(&attempt_key).await;
     let token = state.db.create_patient_session(&patient.id).await?;
-    Ok(Json(json!({
-        "token": token,
-        "patient": { "id": patient.id, "name": patient.name, "rm": patient.id },
-    })))
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "token": token,
+            "patient": { "id": patient.id, "name": patient.name, "rm": patient.id },
+        })),
+    )
+        .into_response())
 }
 
 /// `GET /api/portal/me` — data pasien pemilik token (NIK tersensor).
@@ -275,43 +318,88 @@ mod tests {
         (status, value)
     }
 
-    fn login_req(nik: &str, birth_date: &str) -> Request<Body> {
+    fn login_req(nik: &str, password: &str) -> Request<Body> {
         Request::builder()
             .method("POST")
             .uri("/api/auth/patient-login")
             .header("content-type", "application/json")
             .body(Body::from(
-                json!({ "nik": nik, "birth_date": birth_date }).to_string(),
+                json!({ "nik": nik, "password": password }).to_string(),
             ))
             .expect("request login")
     }
 
-    /// Login Budi Santoso (seed: NIK 3374011503900002, lahir
-    /// 1990-03-15) -> token pasien.
+    /// Login Budi Santoso (seed: NIK 3374011503900002, kata sandi
+    /// portal `waras123`) -> token pasien.
     async fn login_budi(app: &Router) -> String {
-        let (status, body) = call(
-            app.clone(),
-            login_req("3374011503900002", "1990-03-15"),
-        )
-        .await;
+        let (status, body) = call(app.clone(), login_req("3374011503900002", "waras123")).await;
         assert_eq!(status, StatusCode::OK, "login Budi harus OK: {body}");
         body["token"].as_str().expect("token").to_string()
     }
 
     #[tokio::test]
-    async fn patient_login_tanggal_lahir_salah_401() {
+    async fn patient_login_kata_sandi_salah_401() {
         let app = portal_app().await;
-        // NIK benar, tanggal lahir salah -> 401 generik.
-        let (status, body) = call(
-            app.clone(),
-            login_req("3374011503900002", "1990-03-16"),
-        )
-        .await;
+        // NIK benar, kata sandi salah -> 401 generik.
+        let (status, body) = call(app.clone(), login_req("3374011503900002", "salah")).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert!(body["error"]["code"].is_string());
         // NIK tidak ada -> 401 juga (bukan 404: jangan bocorkan).
-        let (status, _) = call(app, login_req("3374011503900099", "1990-03-15")).await;
+        let (status, _) = call(app, login_req("3374011503900099", "waras123")).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn patient_login_jalur_lama_nik_tanggal_lahir_ditolak() {
+        let app = portal_app().await;
+        // Payload lama {nik, birth_date} (tanpa password): field
+        // `password` wajib -> 400, BUKAN login sukses.
+        let (status, body) = call(
+            app.clone(),
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/patient-login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "nik": "3374011503900002", "birth_date": "1990-03-15" })
+                        .to_string(),
+                ))
+                .expect("request login lama"),
+        )
+        .await;
+        assert_ne!(status, StatusCode::OK, "jalur lama tidak boleh login: {body}");
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        // Tanggal lahir yang dipakai SEBAGAI kata sandi -> 401.
+        let (status, _) = call(
+            app,
+            login_req("3374011503900002", "1990-03-15"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn patient_login_lima_gagal_mengunci() {
+        let app = portal_app().await;
+        // 4 gagal pertama -> 401; ke-5 -> 429 (terkunci 15 menit).
+        for i in 1..5 {
+            let (status, _) = call(
+                app.clone(),
+                login_req("3374011503900002", "salah"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "gagal ke-{i}");
+        }
+        let (status, body) = call(app.clone(), login_req("3374011503900002", "salah")).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert_eq!(body["error"]["code"], "RATE_LIMITED");
+        assert!(
+            body["error"]["message"].as_str().unwrap_or("").contains("coba lagi"),
+            "{body}"
+        );
+        // Kata sandi benar pun ditolak selama terkunci.
+        let (status, _) = call(app, login_req("3374011503900002", "waras123")).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]

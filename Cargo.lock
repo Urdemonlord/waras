@@ -2453,6 +2453,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tower",
+ "tower-http",
  "tracing",
  "waras-bridge",
  "waras-core",

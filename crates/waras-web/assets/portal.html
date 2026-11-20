@@ -54,15 +54,15 @@
   <button class="btn sm" id="portal-logout-top" type="button" style="display:none">Keluar</button>
 </header>
 <div class="content" style="max-width:520px">
-<div class="page-head"><h1>Portal Pasien</h1><div class="sub" id="portal-sub">Masuk dengan NIK dan tanggal lahir.</div></div>
+<div class="page-head"><h1>Portal Pasien</h1><div class="sub" id="portal-sub">Masuk dengan NIK dan kata sandi portal.</div></div>
 
 <div id="portal-login" class="card">
   <form id="portal-login-form">
     <div class="field"><label for="portal-nik">NIK</label><input id="portal-nik" inputmode="numeric" maxlength="16" placeholder="16 digit NIK" required></div>
-    <div class="field"><label for="portal-dob">Tanggal lahir</label><input id="portal-dob" type="date" required></div>
+    <div class="field"><label for="portal-password">Kata sandi portal</label><input id="portal-password" type="password" placeholder="Kata sandi portal" autocomplete="current-password" required></div>
     <button class="btn primary block" type="submit">Masuk portal</button>
     <p class="form-error" id="portal-error"></p>
-    <p class="muted small" style="margin-top:12px">Login memakai NIK + tanggal lahir (kredensial kelas demo). Untuk produksi, portal memakai OTP atau kata sandi &mdash; lihat FASE4.md &sect;7.</p>
+    <p class="muted small" style="margin-top:12px">Login memakai NIK + kata sandi portal. Kata sandi demo pasien seed: <strong>waras123</strong> (sama seperti kata sandi staf; ganti sebelum dipakai di luar demo). NIK + tanggal lahir saja tidak bisa masuk.</p>
   </form>
 </div>
 

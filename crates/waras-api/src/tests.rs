@@ -197,6 +197,129 @@ async fn login_unknown_user_is_401() {
     assert_eq!(s, StatusCode::UNAUTHORIZED, "{v}");
 }
 
+// Fase A/A4: brute-force login staf — 5 gagal dalam 15 menit untuk
+// IP + username yang sama -> 429 + Retry-After; kata sandi benar pun
+// ditolak selama terkunci.
+#[tokio::test]
+async fn login_lima_gagal_mengunci_429() {
+    let app = seeded_app().await;
+    for i in 1..5 {
+        let (s, v, _) = call(
+            app.clone(),
+            req(
+                "POST",
+                "/api/auth/login",
+                None,
+                Some(json!({"username": "ahmad", "password": "salah"})),
+            ),
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "gagal ke-{i}: {v}");
+    }
+    let (s, v, _) = call(
+        app.clone(),
+        req(
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({"username": "ahmad", "password": "salah"})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "{v}");
+    assert_eq!(v["error"]["code"], "RATE_LIMITED");
+    // Kata sandi benar tetap ditolak selama terkunci.
+    let (s, _, _) = call(
+        app,
+        req(
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({"username": "ahmad", "password": "waras123"})),
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+}
+
+// Fase A/A4: satu login sukses membersihkan hitungan kegagalan —
+// 4 gagal + 1 sukses + 4 gagal lagi TIDAK mengunci (bukan 8 gagal
+// beruntun).
+#[tokio::test]
+async fn login_sukses_membersihkan_hitungan_gagal() {
+    let app = seeded_app().await;
+    for _ in 0..4 {
+        let (s, _, _) = call(
+            app.clone(),
+            req(
+                "POST",
+                "/api/auth/login",
+                None,
+                Some(json!({"username": "sari", "password": "salah"})),
+            ),
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED);
+    }
+    let token = login_as(&app, "sari").await;
+    assert!(!token.is_empty());
+    for i in 1..5 {
+        let (s, v, _) = call(
+            app.clone(),
+            req(
+                "POST",
+                "/api/auth/login",
+                None,
+                Some(json!({"username": "sari", "password": "salah"})),
+            ),
+        )
+        .await;
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "gagal ke-{i} setelah sukses: {v}");
+    }
+}
+
+// Fase A/A4: header keamanan ada di respons API maupun halaman.
+#[tokio::test]
+async fn security_headers_ada_di_api_dan_halaman() {
+    let app = seeded_app().await;
+    for uri in ["/api/health", "/"] {
+        let resp = app
+            .clone()
+            .oneshot(req("GET", uri, None, None))
+            .await
+            .expect("oneshot");
+        assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+        let h = resp.headers();
+        assert_eq!(
+            h.get("x-content-type-options").and_then(|v| v.to_str().ok()),
+            Some("nosniff"),
+            "{uri}"
+        );
+        assert_eq!(
+            h.get("x-frame-options").and_then(|v| v.to_str().ok()),
+            Some("DENY"),
+            "{uri}"
+        );
+        assert_eq!(
+            h.get("referrer-policy").and_then(|v| v.to_str().ok()),
+            Some("strict-origin-when-cross-origin"),
+            "{uri}"
+        );
+    }
+}
+
+// Fase A/A4: logout menghapus sesi server — token lama ditolak
+// setelah logout (sebelumnya hanya localStorage yang dibersihkan).
+#[tokio::test]
+async fn logout_menghapus_sesi_server() {
+    let app = seeded_app().await;
+    let token = login_as(&app, "ahmad").await;
+    let (s, v, _) = call(app.clone(), req("POST", "/api/auth/logout", Some(&token), None)).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, _, _) = call(app, req("GET", "/api/auth/me", Some(&token), None)).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
 #[tokio::test]
 async fn unauthenticated_request_is_401() {
     let app = seeded_app().await;
