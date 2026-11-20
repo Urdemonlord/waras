@@ -109,6 +109,29 @@ impl Db {
             .ok_or_else(|| WarasError::Database("order lab baru tidak ditemukan".into()))
     }
 
+    /// Ubah status order (dipakai endpoint `POST /api/lab/orders/{id}/status`;
+    /// kontrak FASE3.md §5, method §4 — ditambahkan saat integrasi karena
+    /// agen A belum menulisnya).
+    pub async fn set_lab_order_status(
+        &self,
+        id: &str,
+        status: LabOrderStatus,
+    ) -> Result<(), WarasError> {
+        let n = sqlx::query("UPDATE lab_orders SET status = ? WHERE id = ?")
+            .bind(lab_order_status_to_str(status))
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?
+            .rows_affected();
+        if n == 0 {
+            return Err(WarasError::NotFound(format!(
+                "order lab {id} tidak ditemukan"
+            )));
+        }
+        Ok(())
+    }
+
     pub async fn list_lab_results(&self, order_id: &str) -> Result<Vec<LabResult>, WarasError> {
         let rows: Vec<LabResultRow> = sqlx::query_as(
             "SELECT * FROM lab_results WHERE order_id = ? ORDER BY created_at ASC, id ASC",

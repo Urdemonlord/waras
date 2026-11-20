@@ -340,6 +340,22 @@ SyncBridges`, dan kolom `satusehat_id`/`satusehat_status` +
 `invoices.sep_id`. FASE2.md adalah sumber kebenaran Fase 2; dokumen
 ini tetap sumber kebenaran Fase 1.
 
+## 7.6 Fase 3 (Rumah Sakit) — lihat `docs/FASE3.md`
+
+Fase 3 (branch `fase-3-rumah-sakit`, belum merge/deploy) menambah:
+modul IGD (triase + observasi), Rawat Inap (ward/bed/admisi/mutasi/
+pulang/catatan perawatan), Kamar Operasi & Bersalin (jadwal + tim +
+persalinan), Laboratorium (order + hasil LOINC + flag kritis),
+Radiologi (order + laporan), Casemix/INA-CBG workbench (grouping
+lokal + export JSON untuk E-Klaim — TIDAK ada submit E-Klaim),
+mode PostgreSQL (`WARAS_DATABASE_URL`, DDL `migrations-pg/`),
+validasi pasien salah (422 `WRONG_PATIENT`), aksi RBAC
+`ViewRumahSakit/TriaseIgd/KelolaRawatInap/KelolaOperasi/PesanLab/
+HasilLab/PesanRadiologi/LaporanRadiologi/GroupingCasemix`, kolom
+`claims.patient_id` (migrasi 0005), dan KPI dasbor lab/IGD/bed yang
+kini dihitung dari tabel domain. FASE3.md adalah sumber kebenaran
+Fase 3.
+
 ## 7. Yang SENGAJA tidak dibangun (Fase 2–4)
 
 SATUSEHAT/FHIR sinkronisasi, BPJS (VClaim/PCare/Aplicares/Antrean Online/

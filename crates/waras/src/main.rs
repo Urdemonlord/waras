@@ -79,6 +79,16 @@ async fn main() {
     {
         tracing::info!("Seed Fase 2 dimuat (tabel seps masih kosong)");
     }
+    // Fase 3: seed tabel rumah sakit (IGD/ranap/OK/lab/radiologi/casemix)
+    // bila masih kosong (DB Fase 1/2 yang sudah ada tidak menjalankan
+    // `seed()` lagi).
+    if db
+        .seed_fase3_if_empty()
+        .await
+        .expect("gagal memuat data seed Fase 3")
+    {
+        tracing::info!("Seed Fase 3 dimuat (tabel wards masih kosong)");
+    }
 
     // Jembatan nasional (FASE2.md §5/§7): config dari env, registry
     // berisi adapter nyata bila terkonfigurasi, `DisabledBridge` bila

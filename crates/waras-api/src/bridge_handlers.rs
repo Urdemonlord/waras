@@ -1089,11 +1089,13 @@ pub async fn create_claim(
         .db
         .create_claim(&Claim {
             id: String::new(),
-            invoice_id: invoice.id.clone(),
+            invoice_id: Some(invoice.id.clone()),
+            patient_id: Some(invoice.patient_id.clone()),
             sep_id: sep_id.clone(),
             ina_cbg_code: body.ina_cbg_code.clone(),
             amount: invoice.amount,
             status: ClaimStatus::Draft,
+            grouping_note: None,
             submitted_at: None,
             created_at: now_clinic(),
         })

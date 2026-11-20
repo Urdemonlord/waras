@@ -73,11 +73,11 @@ fn parse_date_param(s: &str) -> ApiResult<NaiveDate> {
 // Publik: health + login
 // ---------------------------------------------------------------------------
 
-pub async fn health() -> Json<Value> {
+pub async fn health(State(state): State<AppState>) -> Json<Value> {
     Json(json!({
         "status": "ok",
         "version": "0.1.0",
-        "mode": "sqlite",
+        "mode": state.db.mode(),
         "today": clinic_today().to_string(),
     }))
 }

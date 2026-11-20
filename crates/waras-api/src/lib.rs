@@ -263,6 +263,13 @@ pub fn router(state: AppState) -> Router {
         .route("/satusehat", get(web::serve_satusehat))
         .route("/bpjs", get(web::serve_bpjs))
         .route("/antrean-online", get(web::serve_antrean))
+        // -- UI Fase 3 (FASE3.md §5) --------------------------------------
+        .route("/igd", get(web::serve_igd))
+        .route("/ranap", get(web::serve_ranap))
+        .route("/operasi", get(web::serve_operasi))
+        .route("/lab", get(web::serve_lab))
+        .route("/radiologi", get(web::serve_radiologi))
+        .route("/casemix", get(web::serve_casemix))
         .route("/assets/{*path}", get(web::serve_assets))
         .route("/css/{*path}", get(web::serve_css))
         .route("/js/{*path}", get(web::serve_js))

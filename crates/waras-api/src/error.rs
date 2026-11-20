@@ -42,6 +42,8 @@ impl ApiError {
             WarasError::NotFound(_) => "NOT_FOUND",
             WarasError::Validation(_) => "VALIDATION",
             WarasError::Blocked(_) => "BLOCKED",
+            WarasError::WrongPatient(_) => "WRONG_PATIENT",
+            WarasError::Unprocessable(_) => "UNPROCESSABLE",
             WarasError::Unauthorized => "UNAUTHORIZED",
             WarasError::Forbidden(_) => "FORBIDDEN",
             WarasError::Conflict(_) => "CONFLICT",

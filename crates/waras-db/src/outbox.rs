@@ -140,12 +140,22 @@ impl Db {
         } else {
             job.updated_at.clone()
         };
-        let result = sqlx::query(
+        // Dialek: SQLite `INSERT OR IGNORE`, Postgres
+        // `ON CONFLICT (idempotency_key) DO NOTHING` (idempotency_key
+        // UNIQUE di kedua DDL). `?` ditulis ulang jadi `$n` oleh DbPool.
+        let sql = if self.pool.is_postgres() {
+            "INSERT INTO outbox (id, destination, resource_type, resource_id,
+                 idempotency_key, payload, status, attempts, max_attempts, next_retry_at,
+                 last_error, external_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (idempotency_key) DO NOTHING"
+        } else {
             "INSERT OR IGNORE INTO outbox (id, destination, resource_type, resource_id,
                  idempotency_key, payload, status, attempts, max_attempts, next_retry_at,
                  last_error, external_id, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        };
+        let result = sqlx::query(sql)
         .bind(&id)
         .bind(destination_to_str(job.destination))
         .bind(&job.resource_type)

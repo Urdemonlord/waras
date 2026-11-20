@@ -882,6 +882,42 @@ pub async fn seed_fase3(db: &Db) -> Result<bool, waras_core::WarasError> {
     let today = clinic_today();
     let t = |hh: u32, mm: u32| fmt_dt(dt(today, hh, mm));
 
+    // -- Diagnosis utama encounter rawat inap (casemix) -----------------------
+    // Seed Fase 1 hanya memberi diagnosis 'utama' ke ENC-...-014 (J20.9,
+    // tidak terpetakan grouper) dan ENC-...-015 (J06.9 tapi grup Riwayat).
+    // Tanpa baris ini, grouping casemix dari data seed tidak bisa
+    // didemokan untuk satu pun diagnosis terpetakan (FASE3.md §8.11).
+    // Empat encounter selesai di bawah ini adalah pemilik klaim seed
+    // CLM-5510..5512 dan CLM-5514; diagnosisnya sesuai cerita desain.
+    // (id, patient, encounter, code, display, clinician, recorded_at)
+    let f3_conditions: [(&str, &str, &str, &str, &str, &str, String); 4] = [
+        ("COND-011", "RM-000814", "ENC-2026-11-19-016", "J18.9",
+         "Pneumonia", "dr. Rina, Sp.PD", t(11, 0)),
+        ("COND-012", "RM-000816", "ENC-2026-11-19-018", "I20.9",
+         "Angina pektoris", "dr. Ahmad Hidayat", t(13, 30)),
+        ("COND-013", "RM-000817", "ENC-2026-11-19-019", "K35.8",
+         "Apendisitis akut", "dr. Budi, Sp.B", t(14, 0)),
+        ("COND-014", "RM-000821", "ENC-2026-11-19-020", "O80",
+         "Persalinan normal", "dr. Rina, Sp.PD", t(15, 0)),
+    ];
+    for (id, patient, encounter, code, display, clinician, recorded) in f3_conditions {
+        sqlx::query(
+            "INSERT INTO conditions (id, patient_id, encounter_id, condition_group,
+                 code, display, status, clinician, recorded_at)
+             VALUES (?, ?, ?, 'utama', ?, ?, 'aktif', ?, ?)",
+        )
+        .bind(id)
+        .bind(patient)
+        .bind(encounter)
+        .bind(code)
+        .bind(display)
+        .bind(clinician)
+        .bind(recorded)
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+
     // -- Bangsal + bed --------------------------------------------------------
     // (id, kind, floor, [(room, jumlah bed)])
     let wards: [(&str, &str, &str, &[(&str, u32)]); 5] = [
@@ -1319,13 +1355,14 @@ pub async fn seed_fase3(db: &Db) -> Result<bool, waras_core::WarasError> {
         ("CLM-5517", "RM-000819", "J03.9 Tonsilitis", "J-4-10-0", 185_000, "diajukan",
          "Diagnosis utama: J03.9 Tonsilitis. Grouping lokal (perkiraan): J-4-10-0."),
     ];
-    for (id, _patient, _diag, code, amount, status, note) in claims {
+    for (id, patient, _diag, code, amount, status, note) in claims {
         sqlx::query(
-            "INSERT INTO claims (id, invoice_id, sep_id, ina_cbg_code, amount,
+            "INSERT INTO claims (id, invoice_id, patient_id, sep_id, ina_cbg_code, amount,
                  status, submitted_at, created_at, grouping_note)
-             VALUES (?, NULL, NULL, ?, ?, ?, NULL, ?, ?)",
+             VALUES (?, NULL, ?, NULL, ?, ?, ?, NULL, ?, ?)",
         )
         .bind(id)
+        .bind(patient)
         .bind(code)
         .bind(amount)
         .bind(status)

@@ -24,9 +24,9 @@ use waras_core::{
     casemix::group_casemix as core_group_casemix,
     rbac::Action,
     types::{
-        Admission, AdmissionStatus, BedStatus, CareNote, ConditionGroup, Delivery, IgdObservation,
-        IgdStatus, IgdVisit, LabOrder, LabOrderStatus, RadOrder, RadOrderStatus, Surgery,
-        SurgeryStatus, TriageLevel, WardBed,
+        Admission, AdmissionStatus, BedStatus, CareNote, Claim, ConditionGroup, Delivery,
+        IgdObservation, IgdStatus, IgdVisit, LabOrder, LabOrderStatus, RadOrder, RadOrderStatus,
+        Surgery, SurgeryStatus, TriageLevel, WardBed,
     },
 };
 use waras_db::{clinic_today, Db, NewLabResult};
@@ -1379,12 +1379,60 @@ pub async fn set_rad_order_status(
 // Casemix (INA-CBG)
 // ---------------------------------------------------------------------------
 
+/// Perkaya satu klaim untuk UI Casemix (integrasi): `patient_name` dari
+/// `patient_id` klaim, jatuh ke tagihan lalu SEP bila kosong; `diagnosis`
+/// dipetik dari `grouping_note` ("Diagnosis utama: ... .").
+/// Klaim seed Fase 3 kini membawa `patient_id`, jadi nama selalu tampil.
+async fn enrich_claim(db: &Db, claim: &Claim) -> Value {
+    let mut patient_id = claim.patient_id.clone();
+    if patient_id.is_none() {
+        if let Some(inv_id) = &claim.invoice_id {
+            if let Ok(Some(inv)) = db.get_invoice(inv_id).await {
+                patient_id = Some(inv.patient_id.clone());
+            }
+        }
+    }
+    if patient_id.is_none() {
+        if let Some(sep_id) = &claim.sep_id {
+            if let Ok(Some(sep)) = db.get_sep(sep_id).await {
+                patient_id = Some(sep.patient_id.clone());
+            }
+        }
+    }
+    let patient_name = match &patient_id {
+        Some(pid) => match db.get_patient(pid).await {
+            Ok(Some(p)) => Some(p.name.clone()),
+            _ => None,
+        },
+        None => None,
+    };
+    let diagnosis = claim.grouping_note.as_ref().and_then(|n| {
+        n.strip_prefix("Diagnosis utama: ")
+            .and_then(|rest| rest.split(". ").next())
+            .map(|s| s.to_string())
+    });
+    let mut v = serde_json::to_value(claim).unwrap_or_else(|_| json!({}));
+    v["patient_name"] = match patient_name {
+        Some(n) => json!(n),
+        None => Value::Null,
+    };
+    v["diagnosis"] = match diagnosis {
+        Some(d) => json!(d),
+        None => Value::Null,
+    };
+    v
+}
+
 pub async fn list_casemix(
     State(state): State<AppState>,
     _auth: AuthUser,
 ) -> ApiResult<Json<Value>> {
     let (total, terverifikasi, dibayar_idr, pending) = state.db.casemix_kpis().await?;
     let claims = state.db.list_casemix().await?;
+    let mut enriched = Vec::with_capacity(claims.len());
+    for c in &claims {
+        enriched.push(enrich_claim(&state.db, c).await);
+    }
     Ok(Json(json!({
         "kpis": {
             "total": total,
@@ -1392,7 +1440,7 @@ pub async fn list_casemix(
             "dibayar_idr": dibayar_idr,
             "pending": pending,
         },
-        "claims": claims,
+        "claims": enriched,
     })))
 }
 
@@ -1441,7 +1489,7 @@ pub async fn group_casemix(
         json!({"encounter_id": encounter_id, "ina_cbg_code": claim.ina_cbg_code}),
     )
     .await;
-    let mut v = serde_json::to_value(&claim)?;
+    let mut v = enrich_claim(&state.db, &claim).await;
     v["code"] = serde_json::to_value(&claim.ina_cbg_code)?;
     v["tariff_idr"] = serde_json::to_value(&claim.amount)?;
     Ok((StatusCode::OK, Json(v)))
@@ -1457,7 +1505,7 @@ pub async fn get_casemix_claim(
         .get_claim(&id)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("klaim {id} tidak ditemukan")))?;
-    Ok(Json(json!(claim)))
+    Ok(Json(enrich_claim(&state.db, &claim).await))
 }
 
 pub async fn export_casemix_claim(
@@ -1474,7 +1522,7 @@ pub async fn export_casemix_claim(
     // Berkas JSON untuk disalin ke aplikasi E-Klaim (FASE3.md §7):
     // grouping lokal (perkiraan) + persiapan berkas saja, WARAS tidak
     // mengirim langsung. TIDAK ada endpoint submit.
-    let mut v = serde_json::to_value(&claim)?;
+    let mut v = enrich_claim(&state.db, &claim).await;
     v["code"] = serde_json::to_value(&claim.ina_cbg_code)?;
     v["tariff_idr"] = serde_json::to_value(&claim.amount)?;
     v["catatan_eklaim"] = json!(

@@ -5,10 +5,12 @@ Healthcare Services*, bahasa Jawa: sehat/sembuh) adalah SIMRS open source
 yang modern dan ringan: **modular monolith, satu binary, full Rust**,
 model data mengikuti resource **HL7 FHIR R4** sejak skema pertama.
 
-Repo ini adalah implementasi **Fase 1 — Inti Klinis** dari paper desain
+Repo ini adalah implementasi **Fase 1 — Inti Klinis, Fase 2 —
+Jembatan Nasional, dan Fase 3 — Rumah Sakit** dari paper desain
 (`~/workspace/your_files/waras-paper-simrs-modern/waras-paper-simrs-modern.pdf`,
 v4) dan desain UI FigCraft v16 (`~/workspace/waras/figcraft/`, file
-`waras-full-v16-lucide.figcraft`).
+`waras-full-v16-lucide.figcraft`). Fase 3 ada di branch
+`fase-3-rumah-sakit` (belum merge/deploy); lihat `docs/FASE3.md`.
 
 ## Demo live
 
@@ -34,6 +36,7 @@ Konfigurasi (environment, semua opsional):
 | `WARAS_HOST` | `127.0.0.1` | Alamat dengar |
 | `WARAS_PORT` | `3000` | Port |
 | `WARAS_DB` | `waras.db` | Berkas SQLite (dibuat otomatis) |
+| `WARAS_DATABASE_URL` | _(kosong)_ | Bila diisi `postgres://...` → mode PostgreSQL (rumah sakit); bila kosong → SQLite |
 | `WARAS_TODAY` | `2026-11-19` | Tanggal klinik ("hari ini") |
 | `RUST_LOG` | `waras=info` | Level log |
 
@@ -257,14 +260,57 @@ stub yang mengenkripsi respons dengan timestamp dari header request.
 - **Kode kelas bed Aplicares dipetakan ke nama UI** ("1" → "Kelas 1")
   supaya refresh tidak membuat baris ganda di samping seed.
 
-## Yang SENGAJA belum dibangun (Fase 3–4)
+## Modul rumah sakit (Fase 3) — branch `fase-3-rumah-sakit`, belum deploy
 
-IGD, Rawat Inap, Kamar Operasi & Bersalin, Laboratorium, Radiologi,
-Casemix penuh (grouping INA-CBG), Inventori, Kepegawaian, Laporan &
-SIRS, Hemodialisa, Transfusi Darah, Gizi, Rekam Medis Gigi, Portal
-Pasien, API Publik. Jembatan nasional (SATUSEHAT + BPJS) sudah dibangun
-di Fase 2 (lihat bagian di atas); mode PostgreSQL adalah Fase 3. Lihat
-paper Bagian 3.4 (kriteria keluar fase) dan Bagian 10 (peta jalan).
+Fase 3 membangun modul rumah sakit dari layar FigCraft v16 (lihat
+`docs/FASE3.md` untuk kontrak lengkap + penyimpangan yang
+didokumentasikan):
+
+- **IGD**: triase Merah/Kuning/Hijau, status Resusitasi/Observasi/
+  Tindakan/Menunggu, encounter fast-track, catatan observasi.
+- **Rawat Inap**: 5 ward (Melati 32, Mawar 28, Anggrek 24, Cempaka 24,
+  ICU 12 = 120 bed, 86 terisi di seed), peta bed, admisi/mutasi/pulang,
+  catatan perawatan, badge Risiko Jatuh.
+- **Kamar Operasi & Bersalin**: jadwal operasi (OK 1–3, kode ICD-9-CM),
+  kamar bersalin VK 1–4, catatan persalinan.
+- **Laboratorium**: order + hasil terstruktur LOINC (Darah lengkap
+  58410-2, Troponin I 10839-9, HbA1c 4548-4, Urinalisis 24357-6,
+  Golongan darah 883-9, Elektrolit 2951-2, Gula darah puasa 1558-6),
+  flag Normal/Tinggi/Rendah/Kritis dihitung server; nilai Kritis
+  membuat notifikasi KRITIS + entri audit.
+- **Radiologi**: order (X-Ray/USG/CT Scan/MRI) + laporan hasil
+  (teks; tidak ada PACS/DICOM — penampil citra menampilkan
+  modalitas/area sebagai teks, bukan citra diagnostik).
+- **Casemix / INA-CBG workbench**: grouping LOKAL dari diagnosis
+  utama encounter ke kode + tarif contoh layar desain (mis. I20.9 →
+  I-4-13-I Rp 4.210.000). **Grouping lokal = perkiraan, bukan grouper
+  resmi INA-CBG; tarif adalah contoh, bukan tarif Kemenkes.**
+  `GET /api/casemix/{id}/export` mengembalikan JSON berkas untuk
+  disalin ke aplikasi E-Klaim — **WARAS tidak mengirim ke E-Klaim
+  langsung** (tidak ada endpoint BPJS-hosted untuk itu; E-Klaim asli
+  adalah aplikasi lokal `ws.php` atau alur FHIR Claim).
+- **Mode PostgreSQL**: `WARAS_DATABASE_URL=postgres://...` memilih
+  PostgreSQL (skema sama, DDL terpisah di `migrations-pg/`);
+  `/api/health` mengembalikan `mode: "postgres"`, footer UI
+  "Mode Rumah Sakit · PostgreSQL". SQLite tetap default.
+- **Validasi pasien salah**: semua tulis klinis yang membawa
+  `patient_id` + `encounter_id` dicocokkan di server — tidak cocok →
+  422 `WRONG_PATIENT`. Form tulis menampilkan konfirmasi
+  "Pasien: {nama} ({rm})" sebelum kirim.
+- **RBAC per modul** (`waras-core::rbac`): Dokter semua aksi Fase 3;
+  Perawat triase/admisi/order lab & radiologi; Kasir grouping Casemix;
+  Apoteker hanya lihat; Admin semua.
+- **KPI dasbor kini nyata** untuk lab/IGD/bed (dihitung dari tabel
+  domain, bukan `daily_stats`): lab menunggu 3 (dulu 26), lab kritis 1
+  (dulu 2), IGD merah 1 (dulu 3), bed 86/120 (tetap).
+
+## Yang SENGAJA belum dibangun (Fase 4)
+
+Inventori, Kepegawaian, Laporan & SIRS, Hemodialisa, Transfusi Darah,
+Gizi, Rekam Medis Gigi, Portal Pasien, API Publik. Jembatan nasional
+(SATUSEHAT + BPJS) sudah dibangun di Fase 2 (lihat bagian di atas).
+Lihat paper Bagian 3.4 (kriteria keluar fase) dan Bagian 10
+(peta jalan).
 
 ## Penyimpangan dari desain (dicatat terbuka)
 
@@ -273,17 +319,15 @@ paper Bagian 3.4 (kriteria keluar fase) dan Bagian 10 (peta jalan).
    A-044 — keduanya tidak bisa benar sekaligus. Seed memakai 44 entri
    supaya baris A-041..A-044 persis seperti desain; KPI dihitung dari
    data nyata sehingga total 44 dan antrean aktif 32 (bukan 42/30).
-2. **Footer "Mode Klinik · SQLite"**, bukan "Mode Rumah Sakit ·
-   PostgreSQL" seperti di desain — itu mode Fase 3; yang berjalan
-   sekarang SQLite.
+2. **Footer mode mengikuti backend**: SQLite → "Mode Klinik · SQLite",
+   PostgreSQL (`WARAS_DATABASE_URL`) → "Mode Rumah Sakit · PostgreSQL".
+   `/api/health` mengembalikan `mode` yang sama.
 3. **Agregat hari ini dari `daily_stats`**: pendaftaran hari ini (248),
    kunjungan 7 hari (rata-rata 178, puncak 210), pendapatan (Rp 18,4 jt,
-   142 transaksi), lab menunggu (26, 2 kritis), IGD merah (3), tempat
-   tidur (86/120), piutang BPJS (Rp 212 jt) dan deposit rawat inap
-   (Rp 46 jt) adalah agregat seed — Lab/IGD/Rawat Inap belum modul
-   Fase 1, jadi belum ada tabel domain untuk menghitungnya. Antrean,
-   janji, resep, tagihan, dan KPI turunannya dihitung langsung dari
-   tabel domain.
+   142 transaksi), piutang BPJS (Rp 212 jt) dan deposit rawat inap
+   (Rp 46 jt) adalah agregat seed. Sejak Fase 3, lab menunggu (3),
+   lab kritis (1), IGD merah (1), dan tempat tidur (86/120) dihitung
+   dari tabel domain, bukan dari `daily_stats`.
 4. **Alamat dan tanggal lahir** pasien selain Siti Rahmawati adalah
    data sintetis seed (desain hanya memberi data lengkap untuk Siti).
 

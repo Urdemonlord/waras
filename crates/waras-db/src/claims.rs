@@ -50,6 +50,8 @@ pub struct ClaimRow {
     pub id: String,
     /// Fase 3: boleh NULL (klaim grouping tidak selalu dari tagihan).
     pub invoice_id: Option<String>,
+    /// Integrasi Fase 3 (migrasi 0005): pasien pemilik klaim.
+    pub patient_id: Option<String>,
     pub sep_id: Option<String>,
     pub ina_cbg_code: String,
     pub amount: i64,
@@ -65,6 +67,7 @@ impl ClaimRow {
         Ok(Claim {
             id: self.id,
             invoice_id: self.invoice_id,
+            patient_id: self.patient_id,
             sep_id: self.sep_id,
             ina_cbg_code: self.ina_cbg_code,
             amount: self.amount,
@@ -153,12 +156,13 @@ impl Db {
             c.id.clone()
         };
         sqlx::query(
-            "INSERT INTO claims (id, invoice_id, sep_id, ina_cbg_code, amount,
+            "INSERT INTO claims (id, invoice_id, patient_id, sep_id, ina_cbg_code, amount,
                  status, submitted_at, created_at, grouping_note)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&c.invoice_id)
+        .bind(&c.patient_id)
         .bind(&c.sep_id)
         .bind(&c.ina_cbg_code)
         .bind(c.amount)
@@ -302,6 +306,7 @@ mod tests {
             .create_claim(&Claim {
                 id: String::new(),
                 invoice_id: Some("INV-2026-1182".into()),
+                patient_id: Some("RM-000813".into()),
                 sep_id: Some("SEP-20261119-002".into()),
                 ina_cbg_code: "J-4-17-I".into(),
                 amount: 120_000,

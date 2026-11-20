@@ -150,6 +150,7 @@ impl Db {
         let claim = Claim {
             id,
             invoice_id,
+            patient_id: Some(encounter.patient_id.clone()),
             sep_id,
             ina_cbg_code: group.code.to_string(),
             amount: group.tariff_idr,
@@ -229,19 +230,11 @@ mod tests {
     #[tokio::test]
     async fn group_claim_creates_and_updates_draft() {
         let db = seeded_db().await;
-        // ENC-...-016 (Dewi): tambah diagnosis utama J18.9 -> J-4-12-I.
+        // ENC-...-016 (Dewi) punya diagnosis utama J18.9 dari seed Fase 3
+        // (COND-011) -> J-4-12-I.
         // (Diagnosis utama seed ENC-...-014 adalah J20.9 Bronkitis — TIDAK
         // ada di tabel grouper §2, jadi sengaja tidak dipakai di sini;
         // lihat group_claim_unmapped_diagnosis_is_422.)
-        sqlx::query(
-            "INSERT INTO conditions (id, patient_id, encounter_id, condition_group,
-                 code, display, status, clinician, recorded_at)
-             VALUES ('COND-T0', 'RM-000814', 'ENC-2026-11-19-016', 'utama',
-                 'J18.9', 'Pneumonia', 'aktif', 'dr. Rina, Sp.PD', '2026-11-19 11:00:00')",
-        )
-        .execute(&db.pool)
-        .await
-        .unwrap();
         let c = db
             .group_claim_for_encounter("ENC-2026-11-19-016", "Sinta Maharani")
             .await
@@ -280,19 +273,19 @@ mod tests {
             Err(WarasError::NotFound(_))
         ));
         // Encounter baru dengan diagnosis Utama J03.9 -> klaim CLM-5518.
-        // ENC-...-019 milik Joko (RM-000817); Joko tidak punya tagihan,
+        // ENC-...-022 milik Sri (RM-000817); Sri tidak punya tagihan,
         // jadi klaim baru tanpa invoice.
         sqlx::query(
             "INSERT INTO conditions (id, patient_id, encounter_id, condition_group,
                  code, display, status, clinician, recorded_at)
-             VALUES ('COND-T1', 'RM-000817', 'ENC-2026-11-19-019', 'utama',
-                 'J03.9', 'Tonsilitis', 'aktif', 'dr. Budi, Sp.B', '2026-11-19 14:00:00')",
+             VALUES ('COND-T1', 'RM-000817', 'ENC-2026-11-19-022', 'utama',
+                 'J03.9', 'Tonsilitis', 'aktif', 'dr. Sari Dewi', '2026-11-19 08:15:00')",
         )
         .execute(&db.pool)
         .await
         .unwrap();
         let c = db
-            .group_claim_for_encounter("ENC-2026-11-19-019", "Sinta Maharani")
+            .group_claim_for_encounter("ENC-2026-11-19-022", "Sinta Maharani")
             .await
             .unwrap();
         assert_eq!(c.id, "CLM-5518");

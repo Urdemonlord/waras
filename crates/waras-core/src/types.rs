@@ -830,6 +830,10 @@ pub struct Claim {
     /// Fase 3: boleh NULL — klaim grouping tidak selalu berangkat dari
     /// tagihan (FASE3.md §1). Klaim Fase 2 tetap menaut invoice.
     pub invoice_id: Option<String>,
+    /// Integrasi Fase 3: pasien pemilik klaim (NULL untuk klaim lama
+    /// sebelum migrasi 0005). Dipakai tabel Casemix supaya nama pasien
+    /// selalu tampil walaupun klaim tidak menaut tagihan/SEP.
+    pub patient_id: Option<String>,
     pub sep_id: Option<String>,
     pub ina_cbg_code: String,
     pub amount: i64,
