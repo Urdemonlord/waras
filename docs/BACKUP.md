@@ -235,8 +235,9 @@ direktori tanpa penanda nama yang jelas.
 - Retensi dihitung dari file `waras-*.db` di direktori backup; file
   backup yang dipindah manual ke nama lain tidak ikut prune.
 - `waras-restore.sh` mendeteksi server berjalan secara best-effort
-  (`pgrep -f waras`); operator tetap bertanggung jawab memastikan
-  service berhenti sebelum restore.
+  (proses bernama persis `waras`, atau PID di `$WARAS_PID_FILE` bila
+  diisi); operator tetap bertanggung jawab memastikan service
+  berhenti sebelum restore.
 - Seed WARAS lambat di mesin kecil (hash Argon2; di sandbox 1,5 CPU
   butuh ~65 detik sampai `/api/health` OK). Itu waktu boot, bukan
   waktu backup/restore — backup/restore sendiri hitungan detik.

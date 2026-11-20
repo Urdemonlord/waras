@@ -49,11 +49,25 @@ DB_ABS="$(cd "$DB_DIR" && pwd)/$(basename "$DB")"
 BACKUP_ABS="$(cd "$(dirname "$BACKUP")" && pwd)/$(basename "$BACKUP")"
 
 # --- 0. server harus berhenti dulu ------------------------------------------
-# Deteksi best-effort: proses yang command line-nya memuat path DB ini,
-# atau biner waras apa pun. Bukan jaminan mutlak — operator tetap yang
-# bertanggung jawab menghentikan service (lihat docs/BACKUP.md).
+# Deteksi best-effort, dan SENGAJA sempit: hanya proses yang NAMA-nya
+# persis `waras` (binary server; `pgrep -x`), plus PID yang dicatat di
+# $WARAS_PID_FILE bila diisi. JANGAN pakai `pgrep -f waras`: pola itu
+# cocok dengan apa pun yang kebetulan mengandung kata "waras" di
+# command line-nya — shell yang cd ke direktori waras, cargo test di
+# worktree waras-*, bahkan skrip drill ini sendiri — dan akan menolak
+# restore yang sebenarnya aman. Operator tetap yang bertanggung jawab
+# menghentikan service (lihat docs/BACKUP.md); cek ini hanya jaring
+# pengaman terhadap kelalaian, bukan jaminan mutlak.
+RUNNING=""
 if command -v pgrep >/dev/null 2>&1; then
-    RUNNING="$(pgrep -af "waras" 2>/dev/null | grep -v "$PROG" | grep -v "pgrep" || true)"
+    RUNNING="$(pgrep -ax waras 2>/dev/null || true)"
+    if [ -n "${WARAS_PID_FILE:-}" ] && [ -f "$WARAS_PID_FILE" ]; then
+        PID_IN_FILE="$(cat "$WARAS_PID_FILE" 2>/dev/null || true)"
+        if [ -n "$PID_IN_FILE" ] && kill -0 "$PID_IN_FILE" 2>/dev/null; then
+            RUNNING="${RUNNING}
+$PID_IN_FILE (dari WARAS_PID_FILE=$WARAS_PID_FILE)"
+        fi
+    fi
     if [ -n "$RUNNING" ]; then
         if [ "$FORCE" = 1 ]; then
             log "WARNING: --force: proses WARAS masih berjalan, lanjut atas risiko sendiri:"
