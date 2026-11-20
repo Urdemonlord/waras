@@ -1,0 +1,32 @@
+# waras-backup.service — backup harian SQLite WARAS (pasangan dari
+# waras-backup.timer). Dijalankan sebagai user `waras`; sesuaikan
+# WorkingDirectory / WARAS_DB / WARAS_BACKUP_DIR dengan instalasi Anda
+# (lihat docs/BACKUP.md § Instalasi).
+#
+# Instalasi:
+#   sudo cp scripts/waras-backup.service scripts/waras-backup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now waras-backup.timer
+#   sudo systemctl status waras-backup.timer
+#   sudo systemctl start waras-backup.service   # uji sekali jalan manual
+#   sudo journalctl -u waras-backup.service -n 50
+
+[Unit]
+Description=Backup harian basis data SQLite WARAS
+After=network.target
+Wants=waras-backup.timer
+
+[Service]
+Type=oneshot
+User=waras
+Group=waras
+WorkingDirectory=/opt/waras
+Environment=WARAS_DB=/opt/waras/waras.db
+Environment=WARAS_BACKUP_DIR=/var/backups/waras
+Environment=WARAS_BACKUP_KEEP=7
+ExecStart=/opt/waras/scripts/waras-backup.sh
+# Jangan restart otomatis: backup gagal harus terlihat (timer akan
+# mencoba lagi besok + alert dari pemeriksaan log), bukan diulang
+# tanpa henti.
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,22 @@
+# waras-backup.timer — jadwal backup harian WARAS.
+# Pilihan utama (lebih baik dari cron): berjalan walau server sempat
+# mati pada jam jadwal (Persistent=true = kejar ketertinggalan saat
+# boot), log-nya masuk journald, dan statusnya bisa dicek dengan
+# `systemctl list-timers`.
+#
+# Jadwal: tiap hari 02:30 waktu lokal (jam sepi klinik). Ganti
+# OnCalendar bila perlu, mis. `*-*-* 03:00:00`.
+#
+# Instalasi: lihat waras-backup.service.
+
+[Unit]
+Description=Backup harian basis data SQLite WARAS
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=waras-backup.service
+
+[Install]
+WantedBy=timers.target
