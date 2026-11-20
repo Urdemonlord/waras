@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Casemix &amp; Klaim INA-CBG — WARAS</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body data-page="casemix">
+<div class="shell">
+<aside class="sidebar">
+  <div class="brand">
+    <img src="/waras-tile-sharp.png" alt="Logo WARAS">
+    <div><div class="name">WARAS</div><div class="sub">SIMRS open source · v1.0</div></div>
+  </div>
+  <nav class="nav">
+<div class="nav-group">PELAYANAN</div>
+<a class="nav-item" data-nav="dashboard" href="/dashboard"><img class="ic" src="/icons/house-CBD5E1.png" alt="">Dashboard</a>
+<a class="nav-item" data-nav="registrasi" href="/registrasi"><img class="ic" src="/icons/pencil-CBD5E1.png" alt="">Registrasi & Antrean</a>
+<a class="nav-item" data-nav="rme" href="/rme?pasien=RM-000812"><img class="ic" src="/icons/stethoscope-CBD5E1.png" alt="">Rekam Medis (RME)</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/arrow-right-CBD5E1.png" alt="">Rawat Jalan<span class="tag-segera">segera</span></a>
+<a class="nav-item" data-nav="igd" href="/igd"><img class="ic" src="/icons/zap-CBD5E1.png" alt="">IGD</a>
+<a class="nav-item" data-nav="ranap" href="/ranap"><img class="ic" src="/icons/heart-pulse-CBD5E1.png" alt="">Rawat Inap</a>
+<a class="nav-item" data-nav="operasi" href="/operasi"><img class="ic" src="/icons/scissors-CBD5E1.png" alt="">Kamar Operasi & Bersalin</a>
+<a class="nav-item" data-nav="farmasi" href="/farmasi"><img class="ic" src="/icons/cross-CBD5E1.png" alt="">Farmasi</a>
+<a class="nav-item" data-nav="lab" href="/lab"><img class="ic" src="/icons/flask-conical-CBD5E1.png" alt="">Laboratorium</a>
+<a class="nav-item" data-nav="radiologi" href="/radiologi"><img class="ic" src="/icons/crosshair-CBD5E1.png" alt="">Radiologi</a>
+<div class="nav-group">KEUANGAN</div>
+<a class="nav-item" data-nav="billing" href="/billing"><img class="ic" src="/icons/scale-CBD5E1.png" alt="">Billing & Kasir</a>
+<a class="nav-item" data-nav="casemix" href="/casemix"><img class="ic" src="/icons/copy-CBD5E1.png" alt="">Casemix (INA-CBG)</a>
+<div class="nav-group">OPERASIONAL</div>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/copy-CBD5E1.png" alt="">Inventori<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/users-CBD5E1.png" alt="">Kepegawaian<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/file-text-CBD5E1.png" alt="">Laporan & SIRS<span class="tag-segera">segera</span></a>
+<div class="nav-group">INTEGRASI</div>
+<a class="nav-item" data-nav="satusehat" href="/satusehat"><img class="ic" src="/icons/rotate-cw-CBD5E1.png" alt="">SATUSEHAT (FHIR)</a>
+<a class="nav-item" data-nav="bpjs" href="/bpjs"><img class="ic" src="/icons/flag-CBD5E1.png" alt="">BPJS · VClaim / PCare</a>
+<a class="nav-item" data-nav="antrean" href="/antrean-online"><img class="ic" src="/icons/clock-CBD5E1.png" alt="">Antrean Online & Aplicares</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/command-CBD5E1.png" alt="">API Publik<span class="tag-segera">segera</span></a>
+<div class="nav-group">SISTEM</div>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/settings-CBD5E1.png" alt="">Pengaturan & Audit<span class="tag-segera">segera</span></a>
+  </nav>
+  <div class="sidebar-foot">RSUD Waras · Semarang<div class="mode">v1.0 · Mode Klinik · SQLite</div></div>
+</aside>
+<main class="main">
+<header class="topbar">
+  <div class="search">
+    <img class="ic-search" src="/icons/search-667085.png" alt="">
+    <input id="top-search" type="search" placeholder="Cari pasien, NIK, RM…" autocomplete="off">
+    <kbd>⌘K</kbd>
+    <div class="search-results" id="search-results"></div>
+  </div>
+  <div class="spacer"></div>
+  <button class="icon-btn" title="Profil" aria-label="Profil"><img src="/icons/circle-user-round-374151.png" alt=""></button>
+  <button class="icon-btn" id="bell-btn" title="Notifikasi" aria-label="Notifikasi"><img src="/icons/mail-374151.png" alt=""><span class="red-dot" id="bell-dot"></span></button>
+  <div class="me">
+    <span class="avatar" id="me-avatar">AH</span>
+    <span><span class="me-name" id="me-name">dr. Ahmad Hidayat</span><br><span class="me-role" id="me-role">Dokter Umum</span></span>
+  </div>
+</header>
+<div class="content">
+<div class="page-head"><h1>Casemix &amp; Klaim INA-CBG</h1><div class="sub">Pengkodean · Grouping · Berkas klaim · E-Klaim</div></div>
+
+<div class="grid" style="grid-template-columns:repeat(4,1fr)">
+  <div class="kpi"><div class="kpi-label">Total klaim <img class="ic" src="/icons/scale-0B7285.png" alt=""></div><div class="kpi-value accent" id="kpi-total">—</div><div class="kpi-sub" id="kpi-total-sub">Berkas klaim di workbench</div></div>
+  <div class="kpi"><div class="kpi-label">Terverifikasi <img class="ic" src="/icons/circle-dot-0B7285.png" alt=""></div><div class="kpi-value" id="kpi-verified">—</div><div class="kpi-sub" id="kpi-verified-sub">—</div></div>
+  <div class="kpi"><div class="kpi-label">Dibayar BPJS <img class="ic" src="/icons/circle-dot-0B7285.png" alt=""></div><div class="kpi-value" id="kpi-paid">—</div><div class="kpi-sub">Nilai terbayar</div></div>
+  <div class="kpi"><div class="kpi-label">Pending / Revisi <img class="ic" src="/icons/clock-0B7285.png" alt=""></div><div class="kpi-value danger" id="kpi-pending">—</div><div class="kpi-sub">Perlu perbaikan pengkodean</div></div>
+</div>
+<p class="muted small" style="margin:10px 0 0">Grouping lokal (perkiraan) — tarif INA-CBG di sini adalah contoh dari layar desain, bukan tarif resmi Kemenkes.</p>
+
+<div class="card" id="group-form-card" style="margin-top:16px;display:none">
+  <div class="card-head"><img class="ic" src="/icons/scale-0B7285.png" alt=""><h2>Grouping baru</h2></div>
+  <form id="group-form">
+    <div class="form-grid">
+      <div class="field"><label for="group-encounter">No. Encounter</label><input id="group-encounter" type="text" placeholder="ENC-2026-11-19-021" required></div>
+    </div>
+    <div class="action-row" style="margin-top:0">
+      <button class="btn" type="button" id="group-check">Cek pasien</button>
+    </div>
+    <p class="muted" id="group-confirm" style="margin:12px 0 0">Pasien: — (isi No. Encounter lalu tekan “Cek pasien”)</p>
+    <div class="action-row" style="margin-top:12px">
+      <button class="btn primary" type="submit" id="group-submit">Grouping klaim</button>
+      <button class="btn" type="button" id="group-cancel">Batal</button>
+    </div>
+    <p class="form-error" id="group-error"></p>
+    <p class="form-ok" id="group-ok"></p>
+  </form>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <div class="card-head"><img class="ic" src="/icons/scale-0B7285.png" alt=""><h2>Berkas klaim — grouping INA-CBG</h2><span><a class="link" href="#" id="btn-new-group" style="margin-right:12px">Grouping baru</a><a class="link" href="#" id="btn-eklaim">Kirim ke E-Klaim</a></span></div>
+  <table class="tbl"><thead><tr><th>No. Klaim</th><th>Pasien</th><th>Diagnosis utama</th><th>INA-CBG</th><th>Tarif</th><th>Status</th><th></th></tr></thead>
+  <tbody id="casemix-body"><tr><td colspan="7" class="empty-note">Memuat berkas klaim…</td></tr></tbody></table>
+  <p class="muted small" style="margin:10px 0 0">Klik baris untuk memilih klaim (untuk “Kirim ke E-Klaim” dan catatan di bawah).</p>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <div class="card-head"><img class="ic" src="/icons/scale-0B7285.png" alt=""><h2>Catatan klaim</h2><a class="link" href="#" id="btn-fix-claim">Perbaiki berkas</a></div>
+  <div id="claim-notes"><p class="empty-note">Memuat catatan klaim…</p></div>
+</div>
+
+<div id="eklaim-modal" style="display:none;position:fixed;inset:0;background:rgba(26,32,39,.55);z-index:50;align-items:center;justify-content:center;padding:24px">
+  <div class="card" style="max-width:640px;width:100%;margin:0;max-height:85vh;overflow:auto">
+    <div class="card-head"><img class="ic" src="/icons/scale-0B7285.png" alt=""><h2>Kirim ke E-Klaim</h2></div>
+    <p style="margin:0 0 8px"><strong>Kirim lewat aplikasi E-Klaim; WARAS tidak mengirim langsung.</strong></p>
+    <p class="muted" style="margin:0 0 12px">WARAS hanya menyiapkan berkas klaim (grouping lokal + JSON). Salin JSON berkas klaim di bawah, lalu tempel / impor di aplikasi E-Klaim. WARAS tidak menebak URL E-Klaim dan tidak punya endpoint pengiriman.</p>
+    <p style="margin:0 0 8px;font-size:13px" id="eklaim-claim">Klaim: —</p>
+    <pre id="eklaim-json" style="background:var(--neutral-bg);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:12px;white-space:pre-wrap;word-break:break-word;margin:0 0 12px">—</pre>
+    <div class="action-row" style="margin-top:0">
+      <button class="btn primary" type="button" id="eklaim-copy">Salin JSON</button>
+      <button class="btn" type="button" id="eklaim-close">Tutup</button>
+    </div>
+    <p class="form-error" id="eklaim-error"></p>
+    <p class="form-ok" id="eklaim-ok"></p>
+  </div>
+</div>
+
+</div>
+</main>
+</div>
+<div id="toast"></div>
+<script src="/js/app.js"></script>
+<script src="/js/casemix.js"></script>
+</body>
+</html>

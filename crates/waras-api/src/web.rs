@@ -65,6 +65,30 @@ pub async fn serve_antrean() -> Response {
     serve_asset("antrean.html")
 }
 
+pub async fn serve_igd() -> Response {
+    serve_asset("igd.html")
+}
+
+pub async fn serve_ranap() -> Response {
+    serve_asset("ranap.html")
+}
+
+pub async fn serve_operasi() -> Response {
+    serve_asset("operasi.html")
+}
+
+pub async fn serve_lab() -> Response {
+    serve_asset("lab.html")
+}
+
+pub async fn serve_radiologi() -> Response {
+    serve_asset("radiologi.html")
+}
+
+pub async fn serve_casemix() -> Response {
+    serve_asset("casemix.html")
+}
+
 pub async fn serve_tile() -> Response {
     serve_asset("waras-tile-sharp.png")
 }

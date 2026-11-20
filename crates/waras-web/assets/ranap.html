@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rawat Inap — WARAS</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body data-page="ranap">
+<div class="shell">
+<aside class="sidebar">
+  <div class="brand">
+    <img src="/waras-tile-sharp.png" alt="Logo WARAS">
+    <div><div class="name">WARAS</div><div class="sub">SIMRS open source · v1.0</div></div>
+  </div>
+  <nav class="nav">
+<div class="nav-group">PELAYANAN</div>
+<a class="nav-item" data-nav="dashboard" href="/dashboard"><img class="ic" src="/icons/house-CBD5E1.png" alt="">Dashboard</a>
+<a class="nav-item" data-nav="registrasi" href="/registrasi"><img class="ic" src="/icons/pencil-CBD5E1.png" alt="">Registrasi & Antrean</a>
+<a class="nav-item" data-nav="rme" href="/rme?pasien=RM-000812"><img class="ic" src="/icons/stethoscope-CBD5E1.png" alt="">Rekam Medis (RME)</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/arrow-right-CBD5E1.png" alt="">Rawat Jalan<span class="tag-segera">segera</span></a>
+<a class="nav-item" data-nav="igd" href="/igd"><img class="ic" src="/icons/zap-CBD5E1.png" alt="">IGD</a>
+<a class="nav-item" data-nav="ranap" href="/ranap"><img class="ic" src="/icons/heart-pulse-CBD5E1.png" alt="">Rawat Inap</a>
+<a class="nav-item" data-nav="operasi" href="/operasi"><img class="ic" src="/icons/scissors-CBD5E1.png" alt="">Kamar Operasi & Bersalin</a>
+<a class="nav-item" data-nav="farmasi" href="/farmasi"><img class="ic" src="/icons/cross-CBD5E1.png" alt="">Farmasi</a>
+<a class="nav-item" data-nav="lab" href="/lab"><img class="ic" src="/icons/flask-conical-CBD5E1.png" alt="">Laboratorium</a>
+<a class="nav-item" data-nav="radiologi" href="/radiologi"><img class="ic" src="/icons/crosshair-CBD5E1.png" alt="">Radiologi</a>
+<div class="nav-group">KEUANGAN</div>
+<a class="nav-item" data-nav="billing" href="/billing"><img class="ic" src="/icons/scale-CBD5E1.png" alt="">Billing & Kasir</a>
+<a class="nav-item" data-nav="casemix" href="/casemix"><img class="ic" src="/icons/copy-CBD5E1.png" alt="">Casemix (INA-CBG)</a>
+<div class="nav-group">OPERASIONAL</div>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/copy-CBD5E1.png" alt="">Inventori<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/users-CBD5E1.png" alt="">Kepegawaian<span class="tag-segera">segera</span></a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/file-text-CBD5E1.png" alt="">Laporan & SIRS<span class="tag-segera">segera</span></a>
+<div class="nav-group">INTEGRASI</div>
+<a class="nav-item" data-nav="satusehat" href="/satusehat"><img class="ic" src="/icons/rotate-cw-CBD5E1.png" alt="">SATUSEHAT (FHIR)</a>
+<a class="nav-item" data-nav="bpjs" href="/bpjs"><img class="ic" src="/icons/flag-CBD5E1.png" alt="">BPJS · VClaim / PCare</a>
+<a class="nav-item" data-nav="antrean" href="/antrean-online"><img class="ic" src="/icons/clock-CBD5E1.png" alt="">Antrean Online & Aplicares</a>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/command-CBD5E1.png" alt="">API Publik<span class="tag-segera">segera</span></a>
+<div class="nav-group">SISTEM</div>
+<a class="nav-item soon" href="#"><img class="ic" src="/icons/settings-CBD5E1.png" alt="">Pengaturan & Audit<span class="tag-segera">segera</span></a>
+  </nav>
+  <div class="sidebar-foot">RSUD Waras · Semarang<div class="mode">v1.0 · Mode Klinik · SQLite</div></div>
+</aside>
+<main class="main">
+<header class="topbar">
+  <div class="search">
+    <img class="ic-search" src="/icons/search-667085.png" alt="">
+    <input id="top-search" type="search" placeholder="Cari pasien, NIK, RM…" autocomplete="off">
+    <kbd>⌘K</kbd>
+    <div class="search-results" id="search-results"></div>
+  </div>
+  <div class="spacer"></div>
+  <button class="icon-btn" title="Profil" aria-label="Profil"><img src="/icons/circle-user-round-374151.png" alt=""></button>
+  <button class="icon-btn" id="bell-btn" title="Notifikasi" aria-label="Notifikasi"><img src="/icons/mail-374151.png" alt=""><span class="red-dot" id="bell-dot"></span></button>
+  <div class="me">
+    <span class="avatar" id="me-avatar">AH</span>
+    <span><span class="me-name" id="me-name">dr. Ahmad Hidayat</span><br><span class="me-role" id="me-role">Dokter Umum</span></span>
+  </div>
+</header>
+<div class="content">
+<div class="page-head"><h1>Rawat Inap</h1><div class="sub">Admisi · Mutasi · Pulang · Tempat tidur real time</div></div>
+
+<div class="grid c2w">
+  <div class="card">
+    <div class="card-head"><img class="ic" src="/icons/layout-grid-0B7285.png" alt=""><h2>Peta tempat tidur — <span id="bedmap-ward-label">Memuat…</span></h2><a class="link" href="#admisi-detail">Mutasi bed</a></div>
+    <div class="pills-row" id="ward-tabs" style="margin-bottom:12px"><span class="pill neutral"><i class="dot"></i>Memuat bangsal…</span></div>
+    <div id="bed-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px"><p class="empty-note">Memuat tempat tidur…</p></div>
+    <p class="muted small" style="margin:12px 0 0"><span style="color:var(--red)">●</span> Terisi &nbsp; <span style="color:var(--green)">●</span> Kosong &nbsp; <span style="color:var(--amber)">●</span> Dibersihkan</p>
+  </div>
+  <div class="card">
+    <div class="card-head"><img class="ic" src="/icons/layout-grid-0B7285.png" alt=""><h2>Ringkasan hunian</h2><a class="link" href="/antrean-online">Lihat Aplicares</a></div>
+    <div id="occupancy-list"><p class="empty-note">Memuat hunian…</p></div>
+    <p class="muted small" style="margin:12px 0 0" id="occupancy-total">—</p>
+  </div>
+</div>
+
+<div class="card" id="admission-form-card" style="margin-top:16px;display:none">
+  <div class="card-head"><img class="ic" src="/icons/heart-pulse-0B7285.png" alt=""><h2>Admisi baru</h2></div>
+  <form id="admission-form">
+    <div class="form-grid">
+      <div class="field"><label for="adm-patient">Pasien</label><select id="adm-patient" required></select></div>
+      <div class="field"><label for="adm-bed">Tempat tidur (hanya yang Kosong)</label><select id="adm-bed" required></select></div>
+      <div class="field"><label for="adm-diag-code">Kode diagnosis (ICD-10)</label><input id="adm-diag-code" type="text" placeholder="I20.9" required></div>
+      <div class="field"><label for="adm-diag-display">Diagnosis</label><input id="adm-diag-display" type="text" placeholder="Angina pektoris" required></div>
+      <div class="field"><label for="adm-dpjp">DPJP</label><input id="adm-dpjp" type="text" placeholder="dr. Rina, Sp.PD" required></div>
+      <div class="field"><label for="adm-encounter">No. Encounter (opsional)</label><input id="adm-encounter" type="text" placeholder="ENC-2026-11-19-021"></div>
+    </div>
+    <div class="field"><label><input id="adm-fall-risk" type="checkbox" style="width:auto"> Risiko jatuh</label></div>
+    <p class="muted" id="adm-confirm" style="margin:4px 0 0">Pasien: —</p>
+    <div class="action-row" style="margin-top:12px">
+      <button class="btn primary" type="submit" id="adm-submit">Simpan admisi</button>
+      <button class="btn" type="button" id="adm-cancel">Batal</button>
+    </div>
+    <p class="form-error" id="adm-error"></p>
+    <p class="form-ok" id="adm-ok"></p>
+  </form>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <div class="card-head"><img class="ic" src="/icons/heart-pulse-0B7285.png" alt=""><h2>Pasien rawat inap</h2><a class="link" href="#" id="btn-new-admission">Admisi baru</a></div>
+  <table class="tbl"><thead><tr><th>No. RM</th><th>Pasien</th><th>Ruang / Bed</th><th>Diagnosis</th><th>Masuk</th><th>DPJP</th><th>Status</th></tr></thead>
+  <tbody id="ranap-body"><tr><td colspan="7" class="empty-note">Memuat pasien rawat inap…</td></tr></tbody></table>
+  <p style="margin:12px 0 0;font-size:13px">Risiko jatuh: <span id="fall-chips"><span class="muted">—</span></span></p>
+  <p class="muted small" style="margin:10px 0 0">Klik baris untuk catatan perawatan, mutasi, dan pulang.</p>
+</div>
+
+<div class="card" style="margin-top:16px" id="admisi-detail">
+  <div class="card-head"><img class="ic" src="/icons/file-text-0B7285.png" alt=""><h2>Perawatan — <span id="detail-label">pilih pasien di tabel</span></h2></div>
+  <div id="care-list"><p class="empty-note">Belum ada pasien dipilih.</p></div>
+  <div id="detail-actions" style="display:none;margin-top:12px">
+    <form id="care-form">
+      <div class="field"><label for="care-note">Catatan perawatan baru</label><input id="care-note" type="text" placeholder="Nyeri dada berkurang, TD 145/90, observasi ketat." required></div>
+      <p class="muted" id="care-confirm" style="margin:4px 0 0">Pasien: —</p>
+      <div class="action-row" style="margin-top:12px">
+        <button class="btn primary" type="submit" id="care-submit">Tambah catatan</button>
+      </div>
+      <p class="form-error" id="care-error"></p>
+      <p class="form-ok" id="care-ok"></p>
+    </form>
+    <div class="form-grid" style="margin-top:12px">
+      <div class="field"><label for="transfer-bed">Pindah ke bed (hanya yang Kosong)</label><select id="transfer-bed"></select></div>
+    </div>
+    <div class="action-row" style="margin-top:0">
+      <button class="btn primary" type="button" id="transfer-btn">Mutasi bed</button>
+      <button class="btn danger" type="button" id="discharge-btn">Pulangkan pasien</button>
+    </div>
+    <p class="form-error" id="detail-error"></p>
+    <p class="form-ok" id="detail-ok"></p>
+  </div>
+</div>
+
+</div>
+</main>
+</div>
+<div id="toast"></div>
+<script src="/js/app.js"></script>
+<script src="/js/ranap.js"></script>
+</body>
+</html>
