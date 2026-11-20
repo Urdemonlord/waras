@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gigi — WARAS</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body data-page="gigi">
+<div class="shell">
+<aside class="sidebar">
+  <div class="brand">
+    <img src="/waras-tile-sharp.png" alt="Logo WARAS">
+    <div><div class="name">WARAS</div><div class="sub">SIMRS open source · v1.0</div></div>
+  </div>
+  <nav class="nav">
+<div class="nav-group">PELAYANAN</div>
+<a class="nav-item" data-nav="dashboard" href="/dashboard"><img class="ic" src="/icons/house-CBD5E1.png" alt="">Dashboard</a>
+<a class="nav-item" data-nav="registrasi" href="/registrasi"><img class="ic" src="/icons/pencil-CBD5E1.png" alt="">Registrasi & Antrean</a>
+<a class="nav-item" data-nav="rme" href="/rme?pasien=RM-000812"><img class="ic" src="/icons/stethoscope-CBD5E1.png" alt="">Rekam Medis (RME)</a>
+<a class="nav-item" data-nav="rawat_jalan" href="/rawat-jalan"><img class="ic" src="/icons/arrow-right-CBD5E1.png" alt="">Rawat Jalan</a>
+<a class="nav-item" data-nav="igd" href="/igd"><img class="ic" src="/icons/zap-CBD5E1.png" alt="">IGD</a>
+<a class="nav-item" data-nav="ranap" href="/ranap"><img class="ic" src="/icons/heart-pulse-CBD5E1.png" alt="">Rawat Inap</a>
+<a class="nav-item" data-nav="operasi" href="/operasi"><img class="ic" src="/icons/scissors-CBD5E1.png" alt="">Kamar Operasi & Bersalin</a>
+<a class="nav-item" data-nav="farmasi" href="/farmasi"><img class="ic" src="/icons/cross-CBD5E1.png" alt="">Farmasi</a>
+<a class="nav-item" data-nav="lab" href="/lab"><img class="ic" src="/icons/flask-conical-CBD5E1.png" alt="">Laboratorium</a>
+<a class="nav-item" data-nav="radiologi" href="/radiologi"><img class="ic" src="/icons/crosshair-CBD5E1.png" alt="">Radiologi</a>
+<a class="nav-item" data-nav="hemodialisa" href="/hemodialisa"><img class="ic" src="/icons/droplets-CBD5E1.png" alt="">Hemodialisa</a>
+<a class="nav-item" data-nav="transfusi" href="/transfusi"><img class="ic" src="/icons/droplet-CBD5E1.png" alt="">Transfusi Darah</a>
+<a class="nav-item" data-nav="gizi" href="/gizi"><img class="ic" src="/icons/apple-CBD5E1.png" alt="">Gizi</a>
+<a class="nav-item" data-nav="gigi" href="/gigi"><img class="ic" src="/icons/smile-CBD5E1.png" alt="">Rekam Medis Gigi</a>
+<a class="nav-item" data-nav="portal" href="/portal"><img class="ic" src="/icons/circle-user-round-CBD5E1.png" alt="">Portal Pasien</a>
+<div class="nav-group">KEUANGAN</div>
+<a class="nav-item" data-nav="billing" href="/billing"><img class="ic" src="/icons/scale-CBD5E1.png" alt="">Billing & Kasir</a>
+<a class="nav-item" data-nav="casemix" href="/casemix"><img class="ic" src="/icons/copy-CBD5E1.png" alt="">Casemix (INA-CBG)</a>
+<div class="nav-group">OPERASIONAL</div>
+<a class="nav-item" data-nav="inventori" href="/inventori"><img class="ic" src="/icons/layout-grid-CBD5E1.png" alt="">Inventori</a>
+<a class="nav-item" data-nav="kepegawaian" href="/kepegawaian"><img class="ic" src="/icons/users-CBD5E1.png" alt="">Kepegawaian</a>
+<a class="nav-item" data-nav="laporan" href="/laporan"><img class="ic" src="/icons/file-text-CBD5E1.png" alt="">Laporan & SIRS</a>
+<div class="nav-group">INTEGRASI</div>
+<a class="nav-item" data-nav="satusehat" href="/satusehat"><img class="ic" src="/icons/rotate-cw-CBD5E1.png" alt="">SATUSEHAT (FHIR)</a>
+<a class="nav-item" data-nav="bpjs" href="/bpjs"><img class="ic" src="/icons/flag-CBD5E1.png" alt="">BPJS · VClaim / PCare</a>
+<a class="nav-item" data-nav="antrean" href="/antrean-online"><img class="ic" src="/icons/clock-CBD5E1.png" alt="">Antrean Online & Aplicares</a>
+<a class="nav-item" data-nav="api_publik" href="/api-publik"><img class="ic" src="/icons/command-CBD5E1.png" alt="">API Publik</a>
+<div class="nav-group">SISTEM</div>
+<a class="nav-item" data-nav="pengaturan" href="/pengaturan"><img class="ic" src="/icons/settings-CBD5E1.png" alt="">Pengaturan & Audit</a>
+  </nav>
+  <div class="sidebar-foot">RSUD Waras · Semarang<div class="mode">v1.0 · Mode Klinik · SQLite</div></div>
+</aside>
+<main class="main">
+<header class="topbar">
+  <div class="search">
+    <img class="ic-search" src="/icons/search-667085.png" alt="">
+    <input id="top-search" type="search" placeholder="Cari pasien, NIK, RM…" autocomplete="off">
+    <kbd>⌘K</kbd>
+    <div class="search-results" id="search-results"></div>
+  </div>
+  <div class="spacer"></div>
+  <button class="icon-btn" title="Profil" aria-label="Profil"><img src="/icons/circle-user-round-374151.png" alt=""></button>
+  <button class="icon-btn" id="bell-btn" title="Notifikasi" aria-label="Notifikasi"><img src="/icons/mail-374151.png" alt=""><span class="red-dot" id="bell-dot"></span></button>
+  <div class="me">
+    <span class="avatar" id="me-avatar">AH</span>
+    <span><span class="me-name" id="me-name">dr. Ahmad Hidayat</span><br><span class="me-role" id="me-role">Dokter Umum</span></span>
+  </div>
+</header>
+<div class="content">
+<style>
+#odontogram{display:grid;grid-template-columns:repeat(16,1fr);gap:6px}
+#odontogram .tooth{height:40px;border:1px solid var(--border);border-radius:6px;background:#fff;font-size:12px;font-weight:600;color:var(--ink2);cursor:pointer;font-family:inherit}
+#odontogram .tooth:hover{border-color:var(--accent)}
+#odontogram .tooth.sel{outline:2px solid var(--accent);outline-offset:1px}
+#odontogram .tooth.st-rencana{background:#FEF3C7;border-color:#F59E0B}
+#odontogram .tooth.st-berjalan{background:#E8F3F5;border-color:#0B7285}
+#odontogram .tooth.st-selesai{background:#E7F6EC;border-color:#16A34A}
+</style>
+<div class="page-head"><h1>Rekam Medis Gigi</h1><div class="sub">Odontogram &middot; Tindakan gigi</div></div>
+
+<div class="grid c2w">
+  <div class="card">
+    <div class="card-head"><img class="ic" src="/icons/smile-0B7285.png" alt=""><h2>Odontogram</h2><a class="link" href="#" id="odonto-clear">Semua gigi</a></div>
+    <p class="muted small" style="margin:0 0 10px">Rahang atas (11&ndash;18, 21&ndash;28) &middot; Rahang bawah (31&ndash;38, 41&ndash;48). Klik gigi untuk memfilter daftar rekam.</p>
+    <div id="odontogram"></div>
+    <p class="muted small" style="margin:12px 0 0">Kuning: Rencana &middot; Teal: Berjalan &middot; Hijau: Selesai &middot; Putih: belum ada rekam.</p>
+    <p id="odonto-summary" style="margin:10px 0 0;font-size:13px">Pilih gigi untuk melihat diagnosisnya.</p>
+  </div>
+  <div class="card">
+    <div class="card-head"><img class="ic" src="/icons/smile-0B7285.png" alt=""><h2>Tindakan hari ini</h2></div>
+    <div id="gigi-today"><p class="empty-note">Memuat tindakan gigi&hellip;</p></div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <div class="card-head"><img class="ic" src="/icons/smile-0B7285.png" alt=""><h2>Daftar rekam gigi</h2><span class="muted small" id="gigi-filter-label"></span></div>
+  <table class="tbl"><thead><tr><th>Gigi</th><th>Pasien</th><th>Diagnosis</th><th>Kode</th><th>Tindakan</th><th>Dokter gigi</th><th>Status</th><th></th></tr></thead>
+  <tbody id="gigi-body"><tr><td colspan="8" class="empty-note">Memuat rekam gigi&hellip;</td></tr></tbody></table>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <div class="card-head"><img class="ic" src="/icons/smile-0B7285.png" alt=""><h2>Rekam gigi baru</h2></div>
+  <form id="gigi-form">
+    <div class="form-grid">
+      <div class="field"><label for="gigi-patient">Pasien</label><select id="gigi-patient" required></select></div>
+      <div class="field"><label for="gigi-tooth">Nomor gigi (FDI)</label><input id="gigi-tooth" type="text" placeholder="36" pattern="[1-4][1-8]" title="Notasi FDI 11&ndash;48" required></div>
+      <div class="field"><label for="gigi-diagnosis">Diagnosis</label><input id="gigi-diagnosis" type="text" placeholder="Karies dentin" required></div>
+      <div class="field"><label for="gigi-diagnosis-code">Kode diagnosis (ICD-10)</label><input id="gigi-diagnosis-code" type="text" placeholder="K02.9"></div>
+      <div class="field"><label for="gigi-treatment">Tindakan</label><input id="gigi-treatment" type="text" placeholder="Tambal komposit" required></div>
+      <div class="field"><label for="gigi-treatment-code">Kode tindakan (ICD-9-CM)</label><input id="gigi-treatment-code" type="text" placeholder="23.2"></div>
+      <div class="field"><label for="gigi-dentist">Dokter gigi</label><input id="gigi-dentist" type="text" value="drg. Maya Kusuma" required></div>
+    </div>
+    <div class="action-row" style="margin-top:0"><button class="btn primary" type="submit">Simpan rekam</button></div>
+    <p class="form-error" id="gigi-error"></p>
+    <p class="form-ok" id="gigi-ok"></p>
+  </form>
+</div>
+
+</div>
+</main>
+</div>
+<div id="toast"></div>
+<script src="/js/app.js"></script>
+<script src="/js/gigi.js"></script>
+</body>
+</html>

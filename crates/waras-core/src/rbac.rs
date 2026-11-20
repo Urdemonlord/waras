@@ -40,6 +40,18 @@ pub enum Action {
     HasilLab,
     LaporanRadiologi,
     GroupingCasemix,
+    // -- Fase 4 (FASE4.md §3) -------------------------------------------
+    ViewEkosistem,
+    KelolaHemodialisa,
+    KelolaTransfusi,
+    KelolaGizi,
+    KelolaGigi,
+    KelolaInventori,
+    KelolaKepegawaian,
+    ViewLaporan,
+    KelolaPengaturan,
+    ManageApiKeys,
+    ViewPortal,
 }
 
 impl Action {
@@ -77,6 +89,17 @@ impl Action {
             Action::HasilLab => "isi hasil lab",
             Action::LaporanRadiologi => "tulis laporan radiologi",
             Action::GroupingCasemix => "grouping dan kelola casemix",
+            Action::ViewEkosistem => "lihat modul ekosistem",
+            Action::KelolaHemodialisa => "kelola hemodialisa",
+            Action::KelolaTransfusi => "kelola transfusi darah",
+            Action::KelolaGizi => "kelola gizi",
+            Action::KelolaGigi => "kelola rekam medis gigi",
+            Action::KelolaInventori => "kelola inventori",
+            Action::KelolaKepegawaian => "kelola kepegawaian",
+            Action::ViewLaporan => "lihat laporan dan SIRS",
+            Action::KelolaPengaturan => "kelola pengaturan aplikasi",
+            Action::ManageApiKeys => "kelola kunci API",
+            Action::ViewPortal => "lihat portal pasien",
         }
     }
 }
@@ -113,6 +136,14 @@ pub fn can(role: Role, action: Action) -> bool {
                 | HasilLab
                 | LaporanRadiologi
                 | GroupingCasemix
+                | ViewEkosistem
+                | KelolaHemodialisa
+                | KelolaTransfusi
+                | KelolaGizi
+                | KelolaGigi
+                | KelolaInventori
+                | KelolaKepegawaian
+                | ViewLaporan
         ),
         Role::Perawat => matches!(
             action,
@@ -130,10 +161,24 @@ pub fn can(role: Role, action: Action) -> bool {
                 | KelolaRawatInap
                 | PesanLab
                 | PesanRadiologi
+                | ViewEkosistem
+                | KelolaHemodialisa
+                | KelolaTransfusi
+                | KelolaGizi
+                | KelolaGigi
+                | ViewLaporan
         ),
         Role::Apoteker => matches!(
             action,
-            ViewDashboard | ViewPatient | Dispense | ViewDrugs | ViewBridges | ViewRumahSakit
+            ViewDashboard
+                | ViewPatient
+                | Dispense
+                | ViewDrugs
+                | ViewBridges
+                | ViewRumahSakit
+                | ViewEkosistem
+                | KelolaInventori
+                | ViewLaporan
         ),
         Role::Kasir => matches!(
             action,
@@ -145,7 +190,11 @@ pub fn can(role: Role, action: Action) -> bool {
                 | CreateClaim
                 | ViewRumahSakit
                 | GroupingCasemix
+                | ViewEkosistem
+                | ViewLaporan
         ),
+        // Pasien: HANYA portal (FASE4.md §3) — tidak ada aksi staf lain.
+        Role::Pasien => matches!(action, ViewPortal),
     }
 }
 
@@ -199,6 +248,17 @@ mod tests {
             Action::HasilLab,
             Action::LaporanRadiologi,
             Action::GroupingCasemix,
+            Action::ViewEkosistem,
+            Action::KelolaHemodialisa,
+            Action::KelolaTransfusi,
+            Action::KelolaGizi,
+            Action::KelolaGigi,
+            Action::KelolaInventori,
+            Action::KelolaKepegawaian,
+            Action::ViewLaporan,
+            Action::KelolaPengaturan,
+            Action::ManageApiKeys,
+            Action::ViewPortal,
         ] {
             assert!(can(Role::Admin, action));
         }
@@ -282,5 +342,105 @@ mod tests {
         ] {
             assert!(!can(Role::Kasir, a), "kasir tidak boleh {a:?}");
         }
+    }
+
+    #[test]
+    fn fase4_matrix() {
+        // FASE4.md §3.
+        let dokter = [
+            Action::ViewEkosistem,
+            Action::KelolaHemodialisa,
+            Action::KelolaTransfusi,
+            Action::KelolaGizi,
+            Action::KelolaGigi,
+            Action::KelolaInventori,
+            Action::KelolaKepegawaian,
+            Action::ViewLaporan,
+        ];
+        for a in dokter {
+            assert!(can(Role::DokterUmum, a), "dokter harus bisa {a:?}");
+        }
+        assert!(!can(Role::DokterUmum, Action::KelolaPengaturan));
+        assert!(!can(Role::DokterUmum, Action::ManageApiKeys));
+        assert!(!can(Role::DokterUmum, Action::ViewPortal));
+        // Perawat: lihat + HD + transfusi + gizi + gigi + laporan.
+        for a in [
+            Action::ViewEkosistem,
+            Action::KelolaHemodialisa,
+            Action::KelolaTransfusi,
+            Action::KelolaGizi,
+            Action::KelolaGigi,
+            Action::ViewLaporan,
+        ] {
+            assert!(can(Role::Perawat, a), "perawat harus bisa {a:?}");
+        }
+        for a in [
+            Action::KelolaInventori,
+            Action::KelolaKepegawaian,
+            Action::KelolaPengaturan,
+            Action::ManageApiKeys,
+            Action::ViewPortal,
+        ] {
+            assert!(!can(Role::Perawat, a), "perawat tidak boleh {a:?}");
+        }
+        // Apoteker: lihat + inventori + laporan.
+        for a in [
+            Action::ViewEkosistem,
+            Action::KelolaInventori,
+            Action::ViewLaporan,
+        ] {
+            assert!(can(Role::Apoteker, a), "apoteker harus bisa {a:?}");
+        }
+        for a in [
+            Action::KelolaHemodialisa,
+            Action::KelolaTransfusi,
+            Action::KelolaGizi,
+            Action::KelolaGigi,
+            Action::KelolaKepegawaian,
+            Action::KelolaPengaturan,
+            Action::ManageApiKeys,
+            Action::ViewPortal,
+        ] {
+            assert!(!can(Role::Apoteker, a), "apoteker tidak boleh {a:?}");
+        }
+        // Kasir: lihat + laporan saja.
+        assert!(can(Role::Kasir, Action::ViewEkosistem));
+        assert!(can(Role::Kasir, Action::ViewLaporan));
+        for a in [
+            Action::KelolaHemodialisa,
+            Action::KelolaTransfusi,
+            Action::KelolaGizi,
+            Action::KelolaGigi,
+            Action::KelolaInventori,
+            Action::KelolaKepegawaian,
+            Action::KelolaPengaturan,
+            Action::ManageApiKeys,
+            Action::ViewPortal,
+        ] {
+            assert!(!can(Role::Kasir, a), "kasir tidak boleh {a:?}");
+        }
+        // Admin: semua, termasuk pengaturan + kunci API.
+        assert!(can(Role::Admin, Action::KelolaPengaturan));
+        assert!(can(Role::Admin, Action::ManageApiKeys));
+        // Pasien: HANYA portal.
+        assert!(can(Role::Pasien, Action::ViewPortal));
+        for a in [
+            Action::ViewDashboard,
+            Action::ViewPatient,
+            Action::ViewEkosistem,
+            Action::KelolaHemodialisa,
+            Action::KelolaTransfusi,
+            Action::KelolaGizi,
+            Action::KelolaGigi,
+            Action::KelolaInventori,
+            Action::KelolaKepegawaian,
+            Action::ViewLaporan,
+            Action::KelolaPengaturan,
+            Action::ManageApiKeys,
+        ] {
+            assert!(!can(Role::Pasien, a), "pasien tidak boleh {a:?}");
+        }
+        // Label peran Pasien.
+        assert_eq!(Role::Pasien.label(), "Pasien");
     }
 }

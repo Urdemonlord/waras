@@ -1,11 +1,14 @@
 //! Pengguna & sesi.
 
 use crate::convert::*;
-use crate::rows::UserRow;
+use crate::rows::{PatientRow, UserRow};
 use crate::{db_err, fmt_dt, hex_encode, now_naive, random_token_hex, Db};
 use chrono::Duration;
 use sha2::{Digest, Sha256};
-use waras_core::{types::User, WarasError};
+use waras_core::{
+    types::{Patient, User},
+    WarasError,
+};
 
 impl Db {
     /// Buat user baru. ID `U-###` berikutnya; password di-hash Argon2.
@@ -116,6 +119,66 @@ impl Db {
         .await
         .map_err(db_err)?;
         Ok(n > 0)
+    }
+
+    // -- Sesi pasien (portal, FASE4.md §4/§7) -------------------------------
+    // Sesi pasien: `patient_id` terisi, `user_id` NULL. Token pasien
+    // DITOLAK extractor staf (`find_user_by_token` JOIN ke users tidak
+    // menemukan baris, karena user_id NULL).
+
+    /// Buat sesi pasien: token 32 byte acak (64 hex), kedaluwarsa +12 jam.
+    /// Mengembalikan tokennya.
+    pub async fn create_patient_session(
+        &self,
+        patient_id: &str,
+    ) -> Result<String, WarasError> {
+        let token = random_token_hex();
+        let now = now_naive();
+        let expires = now + Duration::hours(12);
+        sqlx::query(
+            "INSERT INTO sessions (token, user_id, patient_id, created_at, expires_at)
+             VALUES (?, NULL, ?, ?, ?)",
+        )
+        .bind(&token)
+        .bind(patient_id)
+        .bind(fmt_dt(now))
+        .bind(fmt_dt(expires))
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(token)
+    }
+
+    /// Pasien pemilik token pasien, bila token ada dan belum kedaluwarsa.
+    pub async fn find_patient_by_token(
+        &self,
+        token: &str,
+    ) -> Result<Option<Patient>, WarasError> {
+        let row: Option<PatientRow> = sqlx::query_as(
+            "SELECT p.* FROM patients p
+             JOIN sessions s ON s.patient_id = p.id
+             WHERE s.token = ? AND s.expires_at > ? LIMIT 1",
+        )
+        .bind(token)
+        .bind(fmt_dt(now_naive()))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(db_err)?;
+        row.map(|r| r.into_domain()).transpose()
+    }
+
+    /// Pasien lewat NIK (dipakai login portal: NIK + tanggal lahir).
+    pub async fn find_patient_by_nik(
+        &self,
+        nik: &str,
+    ) -> Result<Option<Patient>, WarasError> {
+        let row: Option<PatientRow> =
+            sqlx::query_as("SELECT * FROM patients WHERE nik = ? LIMIT 1")
+                .bind(nik)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(db_err)?;
+        row.map(|r| r.into_domain()).transpose()
     }
 }
 

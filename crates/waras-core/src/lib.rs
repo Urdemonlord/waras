@@ -11,6 +11,7 @@ pub mod dosage;
 pub mod error;
 pub mod fhir;
 pub mod ids;
+pub mod nutrition;
 pub mod rbac;
 pub mod safety;
 pub mod types;

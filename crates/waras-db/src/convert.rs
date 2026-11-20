@@ -16,6 +16,11 @@ fn bad(what: &str, v: &str) -> WarasError {
 }
 
 // --- Role ---
+// CATATAN Fase 4: `Role::Pasien` (FASE4.md §2) hanya peran portal —
+// bukan pengguna staf dan tidak pernah tersimpan di tabel `users`.
+// `role_to_str`/`role_from_str` tetap memetakannya ("pasien") supaya
+// penambahan varian tidak merusak kompilasi; tidak ada baris user
+// ber-peran pasien.
 pub fn role_to_str(r: Role) -> &'static str {
     match r {
         Role::DokterUmum => "dokter_umum",
@@ -23,6 +28,7 @@ pub fn role_to_str(r: Role) -> &'static str {
         Role::Apoteker => "apoteker",
         Role::Kasir => "kasir",
         Role::Admin => "admin",
+        Role::Pasien => "pasien",
     }
 }
 pub fn role_from_str(s: &str) -> Result<Role, WarasError> {
@@ -32,6 +38,7 @@ pub fn role_from_str(s: &str) -> Result<Role, WarasError> {
         "apoteker" => Role::Apoteker,
         "kasir" => Role::Kasir,
         "admin" => Role::Admin,
+        "pasien" => Role::Pasien,
         _ => return Err(bad("role", s)),
     })
 }

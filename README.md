@@ -260,7 +260,7 @@ stub yang mengenkripsi respons dengan timestamp dari header request.
 - **Kode kelas bed Aplicares dipetakan ke nama UI** ("1" → "Kelas 1")
   supaya refresh tidak membuat baris ganda di samping seed.
 
-## Modul rumah sakit (Fase 3) — branch `fase-3-rumah-sakit`, belum deploy
+## Modul rumah sakit (Fase 3) — MERGED + DEPLOYED LIVE (main `eb588d2`)
 
 Fase 3 membangun modul rumah sakit dari layar FigCraft v16 (lihat
 `docs/FASE3.md` untuk kontrak lengkap + penyimpangan yang
@@ -304,13 +304,58 @@ didokumentasikan):
   domain, bukan `daily_stats`): lab menunggu 3 (dulu 26), lab kritis 1
   (dulu 2), IGD merah 1 (dulu 3), bed 86/120 (tetap).
 
-## Yang SENGAJA belum dibangun (Fase 4)
+## Ekosistem (Fase 4) — branch `fase-4-ekosistem`, belum deploy
 
-Inventori, Kepegawaian, Laporan & SIRS, Hemodialisa, Transfusi Darah,
-Gizi, Rekam Medis Gigi, Portal Pasien, API Publik. Jembatan nasional
-(SATUSEHAT + BPJS) sudah dibangun di Fase 2 (lihat bagian di atas).
-Lihat paper Bagian 3.4 (kriteria keluar fase) dan Bagian 10
-(peta jalan).
+Fase 4 menuntaskan semua modul yang masih `segera` di sidebar
+(lihat `docs/FASE4.md` untuk kontrak lengkap). Setelah Fase 4,
+**tidak ada lagi item sidebar bertanda "segera"**:
+
+- **Hemodialisa**: 4 mesin (HD-1..HD-4) + sesi dialisis (jadwal,
+  Berjalan/Selesai, mesin otomatis Sibuk → Siap kembali).
+- **Transfusi Darah**: stok kantong (8 golongan/komponen, status
+  Tersedia/Segera/Habis), permintaan + crossmatch (Cocok/Tidak cocok).
+- **Gizi**: asesmen (IMT dihitung server, kategori Normal/Kurus/
+  Gemuk/Obesitas) + diet & menu.
+- **Rekam Medis Gigi**: odontogram grid FDI 11–48 + perawatan gigi.
+- **Portal Pasien** (`/portal`, mobile 390px): pasien login dengan
+  **NIK + tanggal lahir** dan hanya melihat data sendiri (e-resep,
+  janji, hasil lab, antrean; NIK dimaskir `337402******0001`).
+  **PERINGATAN: login pasien NIK+tanggal lahir adalah kredensial
+  demo — untuk produksi wajib diganti OTP/kata sandi** (lihat
+  `docs/FASE4.md` §8). Peran baru `pasien`: hanya `ViewPortal`.
+- **API Publik** (`/public/v1/*`, `/api-publik`): kunci API dibuat
+  Admin (`wrs_` + 32 heksadesimal acak, disimpan sebagai hash
+  SHA-256, kunci penuh HANYA ditampilkan sekali saat dibuat, tidak
+  pernah di-seed), cakupan `patients:read`, `queue:read`,
+  `encounters:read`, `fhir:read`, rate limit 100/menit per kunci,
+  NIK dimaskir di semua respons. Hanya baca — tidak ada tulis.
+- **Inventori**: stok obat/alkes (status Kritis ≤12 / Segera ≤30 /
+  Aman — logika sama dengan Farmasi), kartu masuk/keluar.
+- **Kepegawaian**: daftar staf + jadwal jaga (satu staf satu shift
+  per hari; duplikat → 422).
+- **Laporan & SIRS**: kunjungan per hari (dari `daily_stats.visits`,
+  sama seperti dasbor; antrean dipakai sebagai pelengkap bila
+  tanggal belum ada di `daily_stats`), 10 besar penyakit, agregat
+  gaya SIRS (bed, kunjungan hari ini, 10 besar penyakit).
+- **Pengaturan & Audit**: 4 kunci pengaturan aplikasi (validasi
+  server; retensi audit hanya Admin) + penampil audit trail
+  (append-only, hash chain SHA-256, read-only).
+- **Rawat Jalan**: daftar kunjungan rawat jalan hari ini dari
+  antrean/encounter.
+- **Modal bersama** (`Waras.modal()`): dipakai di API Publik
+  (tampil kunci sekali + cabut kunci), Kepegawaian
+  (aktifkan/nonaktifkan staf), dan tempat lain yang butuh dialog.
+
+## Yang SENGAJA belum dibangun
+
+- **Aksesibilitas keyboard + layout responsif**: tetap nice-to-have,
+  belum dibangun (dicatat di `docs/FASE4.md` §8).
+- **Migrasi PostgreSQL 0006 belum dieksekusi di Postgres nyata**
+  (sama seperti 0005 di Fase 3): mode Postgres tidak boleh dipakai
+  produksi sebelum boot Postgres dibuktikan.
+- **E-Klaim**: tidak ada endpoint pengiriman (lihat Fase 3 di atas).
+- **BPJS live**: adapter dibangun + terverifikasi stub; butuh
+  kredensial Dev dari faskes mitra JKN (lihat Fase 2 di atas).
 
 ## Penyimpangan dari desain (dicatat terbuka)
 

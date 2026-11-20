@@ -312,7 +312,7 @@ pub async fn set_staff_active(&self, id: &str, active: bool) -> Result<Staff, Wa
 pub async fn list_shifts(&self, date: &str) -> Result<Vec<ShiftSchedule>, WarasError>
 pub async fn create_shift(&self, staff_id: &str, date: &str, shift: &str, poli: &str) -> Result<ShiftSchedule, WarasError> // gagal 422 bila staf sudah punya shift di tanggal itu
 // -- Laporan (agregat, tanpa tabel baru) -------------------------------------------------
-pub async fn report_visits(&self, from: &str, to: &str) -> Result<Vec<(String, i64)>, WarasError> // (tanggal, kunjungan) dari queue_entries per tanggal
+pub async fn report_visits(&self, from: &str, to: &str) -> Result<Vec<(String, i64)>, WarasError> // (tanggal, kunjungan) dari `daily_stats.visits` (sama seperti `visits_7d` dasbor), dilengkapi hitungan antrean untuk tanggal yang belum ada di `daily_stats` — DIUBAH koordinator dari kontrak awal (antrean saja), lihat §8 butir 7
 pub async fn report_top_diseases(&self, limit: i64) -> Result<Vec<(String, String, i64)>, WarasError> // (kode ICD-10, display, jumlah) dari conditions grup Utama/Sekunder/Kronis
 pub async fn report_sirs(&self) -> Result<SirsSummary, WarasError> // RL1: kunjungan hari ini + rawat jalan/inap; RL2: 10 besar penyakit; RL3: bed occupancy + lab pending — hitung dari tabel nyata
 // -- Pengaturan ----------------------------------------------------------------------------
@@ -643,6 +643,17 @@ mengakses endpoint staf apa pun.
    (ditunda dari fase desain): modal DIBANGUN di Fase 4; keyboard
    accessibility + responsive layout tetap nice-to-have — laporkan
    jujur bila dilewati.
+7. `report_visits` diubah koordinator dari kontrak awal (hitung
+   antrean per hari) menjadi `daily_stats.visits` + fallback antrean:
+   antrean hanya ada untuk hari ini, jadi laporan 7 hari dari antrean
+   saja hanya menampilkan satu batang. Angka kini sama dengan
+   `visits_7d` dasbor (19 Nov = 210, bukan 44).
+8. Halaman API Publik mengecek peran lewat `GET /api/auth/me` dulu
+   dan HANYA menembak `GET /api/api-keys` bila peran = Admin; peran
+   lain melihat catatan "Hanya Admin…" tanpa tembakan itu — tembakan
+   403 yang tertangkap tetap tercatat sebagai console error di
+   browser. Endpoint `/api/api-keys` sendiri tetap menegakkan
+   ManageApiKeys (dokter → 403).
 
 ## 9. Yang tetap "segera": TIDAK ADA
 
@@ -651,7 +662,44 @@ Setelah Fase 4, grep `tag-segera` / `nav-item soon` di
 ini sebelum melapor. (Pengecualian: label status stok "Segera" —
 lihat pembuka dokumen ini.)
 
+Terverifikasi 2026-11-20: `tag-segera` = 0, `nav-item soon` = 0,
+"segera hadir" = 0 di HTML/JS. Tersisa 16 tautan `[data-soon]` di
+HTML (tautan fitur kecil tanpa halaman sendiri, BUKAN item
+sidebar) — semuanya ditangkap handler di `app.js` yang menampilkan
+toast "Fitur ini belum tersedia." (tanpa kata "segera").
+
 ## 10. Env vars
 
 Tidak ada env baru. `WARAS_DATABASE_URL` tetap mengatur mode
 PostgreSQL (Fase 3). Migrasi 0006 berjalan di kedua backend.
+
+## 11. Verifikasi (koordinator, 2026-11-20, branch fase-4-ekosistem)
+
+- `cargo test --offline`: **227 lolos, 0 gagal** (api 82, bridge 35,
+  core 32, db 75, web 3). Catatan: satu run sempat gagal 1 tes
+  (`static_pages_and_fallback`, `/` → 404) karena rlib waras-web
+  basi — rust-embed membekukan daftar aset saat kompilasi; sembuh
+  dengan `cargo clean -p waras-web -p waras-api`.
+- Release build OK (1m41 dtk, biner 15,7 MB).
+- Curl di DB segar (port 3101): **96/96 lolos** — 26 halaman 200,
+  login dokter/admin, KPI dasbor (lab 3, bed 86/120), satu alur
+  tulis penuh per modul baru (HD, transfusi, gizi, gigi, inventori,
+  staf, laporan, pengaturan, rawat jalan, portal pasien, kunci API
+  + panggilan publik), regresi Amoxicillin → 422. Dari 10 kegagalan
+  awal, 9 adalah ekspektasi skrip yang salah (bukan bug aplikasi);
+  1 nyata: `report_visits` (lihat §8 butir 7) — diperbaiki, lalu
+  FHIR publik dicek ulang terpisah: 200, NIK termaskir, NIK penuh
+  tidak ada di respons.
+- Playwright Chromium sandbox: **25 halaman × 2 peran (dokter +
+  admin) = 50 muat, 0 console error, 0 page error, 0 request gagal,
+  0 HTTP ≥400**. Satu console error 403 di run pertama (halaman
+  API Publik menembak `/api/api-keys` sebagai dokter) diperbaiki
+  lewat gate peran (lihat §8 butir 8) dan hilang di run ulang.
+- Cek upgrade migrasi 0006: biner Fase 3 (`eb588d2`) di-boot di DB
+  temp, login (membuat baris sesi), lalu biner Fase 4 di-boot di
+  SALINAN DB itu — **token sesi lama tetap berlaku**
+  (`GET /api/auth/me` 200), login ulang 200, pasien 12 → 14,
+  bed 86/120 utuh, mesin HD 4, halaman `/hemodialisa` 200.
+- Migrasi PostgreSQL 0006 BELUM dieksekusi di Postgres nyata
+  (sama seperti 0005 di Fase 3) — jangan aktifkan mode Postgres
+  sebelum boot Postgres dibuktikan.

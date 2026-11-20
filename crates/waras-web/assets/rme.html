@@ -18,27 +18,32 @@
 <a class="nav-item" data-nav="dashboard" href="/dashboard"><img class="ic" src="/icons/house-CBD5E1.png" alt="">Dashboard</a>
 <a class="nav-item" data-nav="registrasi" href="/registrasi"><img class="ic" src="/icons/pencil-CBD5E1.png" alt="">Registrasi & Antrean</a>
 <a class="nav-item" data-nav="rme" href="/rme?pasien=RM-000812"><img class="ic" src="/icons/stethoscope-CBD5E1.png" alt="">Rekam Medis (RME)</a>
-<a class="nav-item soon" href="#"><img class="ic" src="/icons/arrow-right-CBD5E1.png" alt="">Rawat Jalan<span class="tag-segera">segera</span></a>
+<a class="nav-item" data-nav="rawat_jalan" href="/rawat-jalan"><img class="ic" src="/icons/arrow-right-CBD5E1.png" alt="">Rawat Jalan</a>
 <a class="nav-item" data-nav="igd" href="/igd"><img class="ic" src="/icons/zap-CBD5E1.png" alt="">IGD</a>
 <a class="nav-item" data-nav="ranap" href="/ranap"><img class="ic" src="/icons/heart-pulse-CBD5E1.png" alt="">Rawat Inap</a>
 <a class="nav-item" data-nav="operasi" href="/operasi"><img class="ic" src="/icons/scissors-CBD5E1.png" alt="">Kamar Operasi & Bersalin</a>
 <a class="nav-item" data-nav="farmasi" href="/farmasi"><img class="ic" src="/icons/cross-CBD5E1.png" alt="">Farmasi</a>
 <a class="nav-item" data-nav="lab" href="/lab"><img class="ic" src="/icons/flask-conical-CBD5E1.png" alt="">Laboratorium</a>
 <a class="nav-item" data-nav="radiologi" href="/radiologi"><img class="ic" src="/icons/crosshair-CBD5E1.png" alt="">Radiologi</a>
+<a class="nav-item" data-nav="hemodialisa" href="/hemodialisa"><img class="ic" src="/icons/droplets-CBD5E1.png" alt="">Hemodialisa</a>
+<a class="nav-item" data-nav="transfusi" href="/transfusi"><img class="ic" src="/icons/droplet-CBD5E1.png" alt="">Transfusi Darah</a>
+<a class="nav-item" data-nav="gizi" href="/gizi"><img class="ic" src="/icons/apple-CBD5E1.png" alt="">Gizi</a>
+<a class="nav-item" data-nav="gigi" href="/gigi"><img class="ic" src="/icons/smile-CBD5E1.png" alt="">Rekam Medis Gigi</a>
+<a class="nav-item" data-nav="portal" href="/portal"><img class="ic" src="/icons/circle-user-round-CBD5E1.png" alt="">Portal Pasien</a>
 <div class="nav-group">KEUANGAN</div>
 <a class="nav-item" data-nav="billing" href="/billing"><img class="ic" src="/icons/scale-CBD5E1.png" alt="">Billing & Kasir</a>
 <a class="nav-item" data-nav="casemix" href="/casemix"><img class="ic" src="/icons/copy-CBD5E1.png" alt="">Casemix (INA-CBG)</a>
 <div class="nav-group">OPERASIONAL</div>
-<a class="nav-item soon" href="#"><img class="ic" src="/icons/copy-CBD5E1.png" alt="">Inventori<span class="tag-segera">segera</span></a>
-<a class="nav-item soon" href="#"><img class="ic" src="/icons/users-CBD5E1.png" alt="">Kepegawaian<span class="tag-segera">segera</span></a>
-<a class="nav-item soon" href="#"><img class="ic" src="/icons/file-text-CBD5E1.png" alt="">Laporan & SIRS<span class="tag-segera">segera</span></a>
+<a class="nav-item" data-nav="inventori" href="/inventori"><img class="ic" src="/icons/layout-grid-CBD5E1.png" alt="">Inventori</a>
+<a class="nav-item" data-nav="kepegawaian" href="/kepegawaian"><img class="ic" src="/icons/users-CBD5E1.png" alt="">Kepegawaian</a>
+<a class="nav-item" data-nav="laporan" href="/laporan"><img class="ic" src="/icons/file-text-CBD5E1.png" alt="">Laporan & SIRS</a>
 <div class="nav-group">INTEGRASI</div>
 <a class="nav-item" data-nav="satusehat" href="/satusehat"><img class="ic" src="/icons/rotate-cw-CBD5E1.png" alt="">SATUSEHAT (FHIR)</a>
 <a class="nav-item" data-nav="bpjs" href="/bpjs"><img class="ic" src="/icons/flag-CBD5E1.png" alt="">BPJS · VClaim / PCare</a>
 <a class="nav-item" data-nav="antrean" href="/antrean-online"><img class="ic" src="/icons/clock-CBD5E1.png" alt="">Antrean Online & Aplicares</a>
-<a class="nav-item soon" href="#"><img class="ic" src="/icons/command-CBD5E1.png" alt="">API Publik<span class="tag-segera">segera</span></a>
+<a class="nav-item" data-nav="api_publik" href="/api-publik"><img class="ic" src="/icons/command-CBD5E1.png" alt="">API Publik</a>
 <div class="nav-group">SISTEM</div>
-<a class="nav-item soon" href="#"><img class="ic" src="/icons/settings-CBD5E1.png" alt="">Pengaturan & Audit<span class="tag-segera">segera</span></a>
+<a class="nav-item" data-nav="pengaturan" href="/pengaturan"><img class="ic" src="/icons/settings-CBD5E1.png" alt="">Pengaturan & Audit</a>
   </nav>
   <div class="sidebar-foot">RSUD Waras · Semarang<div class="mode">v1.0 · Mode Klinik · SQLite</div></div>
 </aside>
@@ -184,16 +189,16 @@
 </div>
 
 <div class="tab-panel" data-panel="laboratorium">
-  <div class="card"><h2>Laboratorium</h2><p class="empty-note">Modul Laboratorium (permintaan, hasil LOINC, nilai kritis) adalah modul Fase 2–3 — segera hadir. Hasil lab yang sudah ada tampil di notifikasi Dashboard.</p></div>
+  <div class="card"><h2><a href="/lab">Laboratorium</a></h2><p id="rme-lab-summary" class="empty-note">Memuat hasil lab terakhir&hellip;</p><p><a class="link" href="/lab">Buka Laboratorium &rsaquo;</a></p></div>
 </div>
 <div class="tab-panel" data-panel="radiologi">
-  <div class="card"><h2>Radiologi</h2><p class="empty-note">Modul Radiologi (permintaan, modalitas, laporan, citra) adalah modul Fase 2–3 — segera hadir.</p></div>
+  <div class="card"><h2><a href="/radiologi">Radiologi</a></h2><p id="rme-rad-summary" class="empty-note">Memuat laporan radiologi terakhir&hellip;</p><p><a class="link" href="/radiologi">Buka Radiologi &rsaquo;</a></p></div>
 </div>
 <div class="tab-panel" data-panel="tindakan">
-  <div class="card"><h2>Tindakan</h2><p class="empty-note">Tindakan medis tercatat sebagai diagnosis kelompok “Tindakan medis” (FHIR Procedure) di tab Encounter. Modul tindakan lengkap adalah Fase 2–3 — segera hadir.</p></div>
+  <div class="card"><h2>Tindakan</h2><p class="empty-note">Tindakan medis tercatat sebagai diagnosis kelompok &ldquo;Tindakan medis&rdquo; di tab Encounter.</p></div>
 </div>
 <div class="tab-panel" data-panel="dokumen">
-  <div class="card"><h2>Dokumen</h2><p class="empty-note">Dokumen (surat rujukan, hasil cetak, TTE BSrE) adalah modul Fase 2–3 — segera hadir.</p></div>
+  <div class="card"><h2>Dokumen</h2><p class="empty-note">Surat rujukan dibuat dari halaman BPJS; hasil cetak tagihan dari Billing &amp; Kasir.</p></div>
 </div>
 
 <div class="card">
@@ -213,5 +218,42 @@
 <div id="toast"></div>
 <script src="/js/app.js"></script>
 <script src="/js/rme.js"></script>
+<script>
+// Ringkasan Lab/Radiologi di tab RME (FASE4.md §6.3): hasil terakhir pasien
+// hari ini dari API yang sudah ada (/api/lab/orders, /api/radiologi/orders).
+(function () {
+  'use strict';
+  function latestLab(list, pid) {
+    var mine = list.filter(function (o) { return o.patient_id === pid; });
+    if (!mine.length) return null;
+    mine.sort(function (a, b) { return String(b.created_at || '') < String(a.created_at || '') ? -1 : 1; });
+    return mine[0];
+  }
+  document.addEventListener('DOMContentLoaded', function () {
+    var pid = new URLSearchParams(location.search).get('pasien');
+    if (!pid) return;
+    Waras.api('/api/lab/orders?date=' + Waras.TODAY).then(function (data) {
+      var o = latestLab(Waras.asList(data), pid);
+      var el = document.getElementById('rme-lab-summary');
+      if (!el) return;
+      el.textContent = o ? ('Terakhir hari ini: ' + (o.test_name || o.id) + ' (' + (o.status || '') + ').')
+        : 'Belum ada hasil lab hari ini untuk pasien ini.';
+    }).catch(function () {
+      var el = document.getElementById('rme-lab-summary');
+      if (el) el.textContent = 'Hasil lab belum tersedia.';
+    });
+    Waras.api('/api/radiologi/orders?date=' + Waras.TODAY).then(function (data) {
+      var o = latestLab(Waras.asList(data), pid);
+      var el = document.getElementById('rme-rad-summary');
+      if (!el) return;
+      el.textContent = o ? ('Terakhir hari ini: ' + ((o.modality || '') + ' ' + (o.area || '')).trim() + ' (' + (o.status || '') + ').')
+        : 'Belum ada laporan radiologi hari ini untuk pasien ini.';
+    }).catch(function () {
+      var el = document.getElementById('rme-rad-summary');
+      if (el) el.textContent = 'Laporan radiologi belum tersedia.';
+    });
+  });
+})();
+</script>
 </body>
 </html>

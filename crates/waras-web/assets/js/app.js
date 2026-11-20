@@ -195,18 +195,13 @@
     document.querySelectorAll('.nav-item[data-nav]').forEach(function (a) {
       if (a.getAttribute('data-nav') === page) a.classList.add('active');
     });
-    // Item "segera" (Fase 2-4): jangan navigasi, beri tahu saja.
-    document.querySelectorAll('.nav-item.soon').forEach(function (a) {
-      a.addEventListener('click', function (ev) {
-        ev.preventDefault();
-        toast('Modul ' + a.textContent.trim().replace(/\s*segera\s*$/i, '') + ' segera hadir (Fase 2–4).');
-      });
-    });
-    // Tautan "segera" di konten (Fase 2-4): jangan navigasi, beri tahu saja.
+    // Nav aktif dari data-page (tidak ada lagi item .soon — FASE4.md §9).
+    // Tautan [data-soon] yang tersisa (fitur kecil tanpa halaman sendiri)
+    // memberi tahu jujur, bukan klik mati.
     document.querySelectorAll('[data-soon]').forEach(function (a) {
       a.addEventListener('click', function (ev) {
         ev.preventDefault();
-        toast('Modul ini segera hadir (Fase 2–4).');
+        toast('Fitur ini belum tersedia.');
       });
     });
     // Profil dari GET /api/auth/me (bukan hardcode).
@@ -269,11 +264,68 @@
     });
   }
 
+  // ---- Modal (FASE4.md §6) ----
+  // Waras.modal({title, bodyHtml, actions:[{label, kind, onClick}]}).
+  // kind: '' (netral) | 'primary' | 'danger'. Esc menutup, klik backdrop
+  // menutup. Satu modal dalam satu waktu; onClick boleh async — modal
+  // tetap terbuka bila onClick melempar, supaya pesan gagal terlihat.
+  var modalEl = null;
+  function closeModal() {
+    if (!modalEl) return;
+    modalEl.removeEventListener('click', onModalBackdrop);
+    document.removeEventListener('keydown', onModalKey, true);
+    modalEl.remove();
+    modalEl = null;
+  }
+  function onModalBackdrop(ev) {
+    if (ev.target === modalEl) closeModal();
+  }
+  function onModalKey(ev) {
+    if (ev.key === 'Escape') closeModal();
+  }
+  function modal(opts) {
+    opts = opts || {};
+    closeModal();
+    var overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = '<div class="modal-card" role="dialog" aria-modal="true">' +
+      '<div class="modal-head"><h2>' + esc(opts.title || '') + '</h2>' +
+      '<button type="button" class="modal-x" aria-label="Tutup">&times;</button></div>' +
+      '<div class="modal-body">' + (opts.bodyHtml || '') + '</div>' +
+      '<div class="modal-actions"></div></div>';
+    var actionsBox = overlay.querySelector('.modal-actions');
+    (opts.actions || [{ label: 'Tutup', kind: 'primary' }]).forEach(function (a) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn' + (a.kind ? ' ' + a.kind : '');
+      btn.textContent = a.label || 'Tutup';
+      btn.addEventListener('click', async function () {
+        btn.disabled = true;
+        try {
+          if (a.onClick) await a.onClick();
+          closeModal();
+        } catch (e) {
+          btn.disabled = false;
+          toast(e && e.message ? e.message : 'Aksi gagal.', true);
+        }
+      });
+      actionsBox.appendChild(btn);
+    });
+    overlay.querySelector('.modal-x').addEventListener('click', closeModal);
+    overlay.addEventListener('click', onModalBackdrop);
+    document.addEventListener('keydown', onModalKey, true);
+    document.body.appendChild(overlay);
+    modalEl = overlay;
+    var firstBtn = actionsBox.querySelector('.btn');
+    if (firstBtn) firstBtn.focus();
+    return { close: closeModal };
+  }
+
   window.Waras = {
     TODAY: TODAY, api: api, asList: asList, esc: esc,
     fmtRp: fmtRp, fmtJt: fmtJt, fmtNum: fmtNum, fmtDateId: fmtDateId,
     initials: initials, drugDose: drugDose, statusPill: statusPill, pillFor: pillFor,
-    labelFor: labelFor, roleLabel: roleLabel, toast: toast,
+    labelFor: labelFor, roleLabel: roleLabel, toast: toast, modal: modal,
     patientsMap: patientsMap, patientName: patientName,
     token: token, setToken: setToken, initShell: initShell
   };

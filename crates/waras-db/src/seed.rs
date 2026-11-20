@@ -23,6 +23,7 @@ use crate::queue::queue_seed_id;
 use crate::{clinic_today, db_err, fmt_dt, Db};
 use chrono::{NaiveDate, NaiveDateTime};
 use serde_json::json;
+use waras_core::nutrition::{bmi, bmi_category};
 use waras_core::types::{
     AppointmentStatus, ConditionGroup, ConditionStatus, EncounterStatus, Gender,
     Insurance, InvoiceStatus, NotificationKind, PaymentMethod, PrescriptionStatus,
@@ -600,6 +601,10 @@ pub async fn seed(db: &Db) -> Result<(), waras_core::WarasError> {
     // -- Fase 3 (FASE3.md §4.2): IGD, rawat inap, operasi & bersalin,
     // lab, radiologi, casemix.
     seed_fase3(db).await?;
+
+    // -- Fase 4 (FASE4.md §4.2): hemodialisa, transfusi, gizi, gigi,
+    // inventori, kepegawaian, pengaturan + 2 pasien baru.
+    seed_fase4(db).await?;
 
     Ok(())
 }
@@ -1397,6 +1402,433 @@ impl Db {
     }
 }
 
+/// Seed Fase 4 (FASE4.md §4.2). Idempotent: hanya jalan bila tabel
+/// `hd_machines` kosong. Data dari layar desain v16 — bila layar dan
+/// kontrak berbeda, KONTRAK yang menang (penyimpangan dicatat di bawah).
+/// Mengembalikan `true` bila seed dijalankan.
+///
+/// Catatan yang tidak ditentukan kontrak (dicatat agar bisa diaudit):
+/// - Pasien baru dimasukkan DI SINI (bukan di array pasien `seed()`),
+///   supaya `seed_fase4_if_empty` pada DB lama (Fase 1–3) juga
+///   menambahkan RM-000824/825 — pola Fase 3 (pasien di array `seed()`)
+///   tidak menambahkan pasiennya ke DB lama. Total pasien jadi 14;
+///   `create_patient` berikutnya jadi RM-000826.
+/// - Sesi HD tidak menaut encounter (tidak ada encounter HD di seed);
+///   `encounter_id` NULL. Dewi Selesai tapi HD-2 tetap Terpakai —
+///   persis kontrak §4.2 (mesin belum di-reset), walau aturan repo
+///   (`set_hd_session_status` Selesai -> Siap) akan membebaskannya
+///   bila status diubah lewat API.
+/// - `requested_by` permintaan darah: Bambang "dr. Rina, Sp.JP"
+///   (operator kateterisasi seed Fase 3), Sri "dr. Budi, Sp.B"
+///   (operator apendektomi seed Fase 3). Jam crossmatch 09.30.
+/// - `assessed_by` asesmen gizi: "Ns. Sari Wijaya" (tidak ada
+///   dietisian di pengguna seed). `notes` diet kosong.
+/// - `dentist` rekam gigi: "drg. Maya K." (nama di encounter Gigi
+///   seed Fase 1); Agus menaut encounter Gigi ENC-2026-11-19-017,
+///   yang lain NULL (tidak punya encounter Gigi).
+/// - Inventori: kategori semua "Alkes", lokasi "Gudang A",
+///   `min_stock` 30, `expiry` kosong (kontrak tidak memberi nilai);
+///   stok yang di-insert adalah stok SEBELUM mutasi seed, lalu 3
+///   mutasi diterapkan lewat `add_inventory_move` (aturan repo) —
+///   stok akhir sama dengan angka kontrak (240 / 320 / 8).
+///   Mutasi oleh "apt. Dina Puspita".
+/// - Staf: 6 pengguna seed + drg. Maya + Bidan Sari + dr. Andi Wijaya
+///   (STF-009) — kontrak §4.2 menulis "Staf 8", tapi shift ke-8
+///   (Andi Wijaya, Malam IGD) butuh baris staf; tanpa STF-009,
+///   `staff_id` shift itu menggantung. Total staf 9, shift 8.
+/// - Layar vs kontrak (kontrak menang): HD layar 6 mesin/8 klaim
+///   + pasien Bambang/Sri/Joko/Dewi/Agus/Rina + dialyzer FX 80/60
+///   (kontrak: 4 mesin, 3 sesi Slamet/Dewi/Agus, F6/F8); transfusi
+///   layar 18/4/14/3/6/2/22/5 kantong + 7 permintaan TRF-0331..337
+///   (kontrak: 2/2/2/2/1/2/2/0 + 2 permintaan); gizi layar IMT Dewi
+///   27,4 + 6 diet berbeda (kontrak: BMI 27,1 dari 71 kg/162 cm +
+///   3 diet); gigi layar nomor 19/20/47–62 bukan FDI + gigi 16/23/
+///   32/38 K02.1/K04.0 (kontrak: 5 rekam FDI); inventori layar
+///   INV-M001..M007/U001 stok ribuan (kontrak: 10 item); kepegawaian
+///   layar 142 pegawai (kontrak: 8+1 staf); laporan layar agregat
+///   ilustrasi BOR 71,7% dkk. (kontrak: agregat dari tabel nyata);
+///   rawat jalan layar 9 kunjungan + diagnosis H52.1/K02.1
+///   (kontrak: agregat antrean+encounter+janji, tanpa seed baris).
+pub async fn seed_fase4(db: &Db) -> Result<bool, waras_core::WarasError> {
+    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM hd_machines")
+        .fetch_one(&db.pool)
+        .await
+        .map_err(db_err)?;
+    if n > 0 {
+        return Ok(false);
+    }
+    let today = clinic_today();
+    let t = |hh: u32, mm: u32| fmt_dt(dt(today, hh, mm));
+
+    // -- Pasien baru (RM-000824/825) + kondisi kronik Slamet -------------
+    let new_patients: [(&str, &str, &str, NaiveDate, Gender, &str, &str, Option<&str>, Insurance); 2] = [
+        ("RM-000824", "3374031005720013", "Slamet Riyadi", d(1972, 5, 10), Gender::LakiLaki,
+         "Jl. Tlogosari No. 18, Semarang", "O+", Some("0001234567898"), Insurance::Bpjs),
+        ("RM-000825", "3374042505850014", "Ratna Sari", d(1985, 5, 25), Gender::Perempuan,
+         "Jl. Lamper Tengah No. 5, Semarang", "A+", None, Insurance::Umum),
+    ];
+    for (rm, nik, name, birth, gender, address, blood, bpjs, insurance) in new_patients {
+        sqlx::query(
+            "INSERT INTO patients (id, nik, name, birth_date, gender, address, phone,
+                 blood_type, bpjs_number, insurance, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)",
+        )
+        .bind(rm)
+        .bind(nik)
+        .bind(name)
+        .bind(birth.to_string())
+        .bind(gender_to_str(gender))
+        .bind(address)
+        .bind(blood)
+        .bind(bpjs)
+        .bind(insurance_to_str(insurance))
+        .bind(t(7, 0))
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+    // Hanya Slamet yang diberi kondisi kronik N18.9 (FASE4.md §8.3).
+    sqlx::query(
+        "INSERT INTO conditions (id, patient_id, encounter_id, condition_group,
+             code, display, status, clinician, recorded_at)
+         VALUES ('COND-015', 'RM-000824', NULL, 'kronis',
+             'N18.9', 'Gagal ginjal kronik', 'kronis', 'dr. Rina, Sp.PD', ?)",
+    )
+    .bind(t(7, 0))
+    .execute(&db.pool)
+    .await
+    .map_err(db_err)?;
+
+    // -- Hemodialisa: 4 mesin + 3 sesi --------------------------------------
+    let machines: [(&str, &str, &str); 4] = [
+        ("HD-1", "Mesin HD 1", "terpakai"),
+        ("HD-2", "Mesin HD 2", "terpakai"),
+        ("HD-3", "Mesin HD 3", "siap"),
+        ("HD-4", "Mesin HD 4", "perawatan"),
+    ];
+    for (id, name, status) in machines {
+        sqlx::query("INSERT INTO hd_machines (id, name, status) VALUES (?, ?, ?)")
+            .bind(id)
+            .bind(name)
+            .bind(status)
+            .execute(&db.pool)
+            .await
+            .map_err(db_err)?;
+    }
+    // (id, patient, machine, dialyzer, status, jadwal, mulai, selesai)
+    let hd_sessions: [(&str, &str, &str, &str, &str, &str, Option<&str>, Option<&str>); 3] = [
+        ("HD-20261119-001", "RM-000824", "HD-1", "F6", "berjalan",
+         "2026-11-19 07:00", Some("2026-11-19 07:00"), None),
+        ("HD-20261119-002", "RM-000814", "HD-2", "F8", "selesai",
+         "2026-11-19 06:00", Some("2026-11-19 06:00"), Some("2026-11-19 10:00")),
+        ("HD-20261119-003", "RM-000815", "HD-3", "F6", "terjadwal",
+         "2026-11-19 13:00", None, None),
+    ];
+    for (id, patient, machine, dialyzer, status, scheduled, started, finished) in hd_sessions {
+        sqlx::query(
+            "INSERT INTO hd_sessions (id, patient_id, machine_id, encounter_id,
+                 dialyzer, duration_minutes, blood_flow, dialysate_flow,
+                 uf_goal_ml, status, scheduled_at, started_at, finished_at,
+                 notes, created_at)
+             VALUES (?, ?, ?, NULL, ?, 240, 300, 500, 2000, ?, ?, ?, ?, '', ?)",
+        )
+        .bind(id)
+        .bind(patient)
+        .bind(machine)
+        .bind(dialyzer)
+        .bind(status)
+        .bind(scheduled)
+        .bind(started)
+        .bind(finished)
+        .bind(t(7, 0))
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+
+    // -- Transfusi: 8 stok PRC + 2 permintaan + 1 crossmatch -----------------
+    // (id, golongan, kantong, status)
+    let blood: [(&str, &str, i64, &str); 8] = [
+        ("BL-A-POS-001", "A+", 2, "Tersedia"),
+        ("BL-A-NEG-001", "A-", 2, "Tersedia"),
+        ("BL-B-POS-001", "B+", 2, "Tersedia"),
+        ("BL-B-NEG-001", "B-", 2, "Tersedia"),
+        ("BL-O-POS-001", "O+", 1, "Menipis"),
+        ("BL-O-NEG-001", "O-", 2, "Tersedia"),
+        ("BL-AB-POS-001", "AB+", 2, "Tersedia"),
+        ("BL-AB-NEG-001", "AB-", 0, "Habis"),
+    ];
+    for (id, blood_type, units, status) in blood {
+        sqlx::query(
+            "INSERT INTO blood_stock (id, blood_type, component, units, expires_at, status)
+             VALUES (?, ?, 'PRC', ?, '2026-12-19', ?)",
+        )
+        .bind(id)
+        .bind(blood_type)
+        .bind(units)
+        .bind(status)
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+    // (id, patient, golongan, kantong, alasan, status, diminta_oleh, jam)
+    let requests: [(&str, &str, &str, i64, &str, &str, &str, (u32, u32)); 2] = [
+        ("TR-20261119-001", "RM-000820", "O+", 2, "Pasca kateterisasi jantung",
+         "menunggu", "dr. Rina, Sp.JP", (8, 30)),
+        ("TR-20261119-002", "RM-000821", "B+", 1, "Pasca apendektomi",
+         "crossmatch", "dr. Budi, Sp.B", (9, 15)),
+    ];
+    for (id, patient, blood_type, units, reason, status, by, (hh, mm)) in requests {
+        sqlx::query(
+            "INSERT INTO blood_requests (id, patient_id, encounter_id, blood_type,
+                 component, units, reason, status, requested_by, created_at)
+             VALUES (?, ?, NULL, ?, 'PRC', ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(patient)
+        .bind(blood_type)
+        .bind(units)
+        .bind(reason)
+        .bind(status)
+        .bind(by)
+        .bind(fmt_dt(dt(today, hh, mm)))
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+    sqlx::query(
+        "INSERT INTO blood_crossmatches (id, request_id, bag_id, result, tested_by, tested_at)
+         VALUES ('XM-000001', 'TR-20261119-002', 'BL-B-POS-001', 'Cocok', 'Ns. Sari Wijaya', ?)",
+    )
+    .bind(t(9, 30))
+    .execute(&db.pool)
+    .await
+    .map_err(db_err)?;
+
+    // -- Gizi: 4 asesmen (BMI dihitung core) + 3 diet -------------------------
+    // (id, patient, berat, tinggi, risiko, diet, jam)
+    let assessments: [(&str, &str, f64, f64, &str, &str, (u32, u32)); 4] = [
+        ("GZ-000001", "RM-000812", 62.0, 160.0, "Rendah", "DM 1800 kkal", (8, 0)),
+        ("GZ-000002", "RM-000820", 78.0, 170.0, "Sedang", "Jantung 2000 kkal", (8, 30)),
+        ("GZ-000003", "RM-000816", 58.0, 158.0, "Rendah", "Nifas 2200 kkal", (9, 0)),
+        ("GZ-000004", "RM-000814", 71.0, 162.0, "Sedang", "DM 1700 kkal", (9, 30)),
+    ];
+    for (id, patient, weight, height, risk, diet, (hh, mm)) in assessments {
+        let bmi_value = (bmi(weight, height) * 10.0).round() / 10.0;
+        let category = bmi_category(bmi_value);
+        sqlx::query(
+            "INSERT INTO nutrition_assessments (id, patient_id, encounter_id,
+                 weight_kg, height_cm, bmi, imt_category, risk, diet, notes,
+                 assessed_by, created_at)
+             VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, '', 'Ns. Sari Wijaya', ?)",
+        )
+        .bind(id)
+        .bind(patient)
+        .bind(weight)
+        .bind(height)
+        .bind(bmi_value)
+        .bind(category)
+        .bind(risk)
+        .bind(diet)
+        .bind(fmt_dt(dt(today, hh, mm)))
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+    // (id, patient, tipe, kalori)
+    let diets: [(&str, &str, &str, i64); 3] = [
+        ("DT-000001", "RM-000812", "DM", 1800),
+        ("DT-000002", "RM-000820", "Jantung", 2000),
+        ("DT-000003", "RM-000814", "DM", 1700),
+    ];
+    for (id, patient, diet_type, calories) in diets {
+        sqlx::query(
+            "INSERT INTO nutrition_diets (id, patient_id, diet_type, calories,
+                 notes, start_date, status)
+             VALUES (?, ?, ?, ?, '', ?, 'Aktif')",
+        )
+        .bind(id)
+        .bind(patient)
+        .bind(diet_type)
+        .bind(calories)
+        .bind(today.to_string())
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+
+    // -- Rekam medis gigi: 5 rekam ---------------------------------------------
+    // (id, patient, encounter, gigi, diagnosis, kode, tindakan, kode, status, jam)
+    let dental: [(&str, &str, Option<&str>, &str, &str, &str, &str, &str, &str, (u32, u32)); 5] = [
+        ("GG-000001", "RM-000815", Some("ENC-2026-11-19-017"), "36",
+         "Karies dentin", "K02.9", "Tambal komposit", "23.2", "Selesai", (8, 0)),
+        ("GG-000002", "RM-000812", None, "11",
+         "Atrisi email", "K03.0", "Scaling", "89.42", "Selesai", (9, 0)),
+        ("GG-000003", "RM-000813", None, "46",
+         "Karies dentin", "K02.9", "Tambal komposit", "23.2", "Rencana", (10, 0)),
+        ("GG-000004", "RM-000819", None, "21",
+         "Gigi supernumerary", "K00.6", "Observasi", "", "Selesai", (11, 0)),
+        ("GG-000005", "RM-000817", None, "16",
+         "Karies dentin", "K02.9", "Pencabutan", "23.1", "Selesai", (13, 0)),
+    ];
+    for (id, patient, encounter, tooth, diagnosis, code, treatment, tcode, status, (hh, mm)) in dental {
+        sqlx::query(
+            "INSERT INTO dental_records (id, patient_id, encounter_id, tooth_number,
+                 diagnosis, diagnosis_code, treatment, treatment_code, dentist,
+                 status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'drg. Maya K.', ?, ?)",
+        )
+        .bind(id)
+        .bind(patient)
+        .bind(encounter)
+        .bind(tooth)
+        .bind(diagnosis)
+        .bind(code)
+        .bind(treatment)
+        .bind(tcode)
+        .bind(status)
+        .bind(fmt_dt(dt(today, hh, mm)))
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+
+    // -- Inventori: 10 item (stok SEBELUM mutasi) + 3 mutasi -------------------
+    // (id, nama, satuan, stok_awal)
+    let items: [(&str, &str, &str, i64); 10] = [
+        ("INV-ITM-001", "Infus set", "pcs", 140),
+        ("INV-ITM-002", "Sarung tangan", "box", 180),
+        ("INV-ITM-003", "Masker bedah", "box", 360),
+        ("INV-ITM-004", "Alkohol 70%", "botol", 45),
+        ("INV-ITM-005", "Kasa steril", "pcs", 90),
+        ("INV-ITM-006", "Spuit 5 mL", "pcs", 150),
+        ("INV-ITM-007", "Benang jahit 3-0", "pcs", 28),
+        ("INV-ITM-008", "Kateter urine", "pcs", 15),
+        ("INV-ITM-009", "Oksigen tabung", "tabung", 4),
+        ("INV-ITM-010", "Handscoon steril", "box", 5),
+    ];
+    for (id, name, unit, stock) in items {
+        sqlx::query(
+            "INSERT INTO inventory_items (id, name, category, unit, stock,
+                 min_stock, location, expiry, created_at)
+             VALUES (?, ?, 'Alkes', ?, ?, 30, 'Gudang A', '', ?)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(unit)
+        .bind(stock)
+        .bind(t(7, 0))
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+    // Mutasi lewat aturan repo (stok akhir = angka kontrak §4.2).
+    db.add_inventory_move("INV-ITM-001", "Masuk", 100, "Pengadaan November", "apt. Dina Puspita")
+        .await?;
+    db.add_inventory_move("INV-ITM-003", "Keluar", 40, "Distribusi poli", "apt. Dina Puspita")
+        .await?;
+    db.add_inventory_move("INV-ITM-009", "Masuk", 4, "Isi ulang", "apt. Dina Puspita")
+        .await?;
+
+    // -- Kepegawaian: 9 staf + 8 shift ------------------------------------------
+    // (id, nama, nip, peran, poli)
+    let staff: [(&str, &str, &str, &str, &str); 9] = [
+        ("STF-001", "dr. Ahmad Hidayat", "198505122010011001", "Dokter Umum", "Poli Umum"),
+        ("STF-002", "Ns. Sari Wijaya", "199001152015032002", "Perawat", "Poli Umum"),
+        ("STF-003", "dr. Rina, Sp.PD", "198208102008122003", "Dokter Umum", "Penyakit Dalam"),
+        ("STF-004", "apt. Dina Puspita", "199303252019032004", "Apoteker", "Farmasi"),
+        ("STF-005", "Sinta Maharani", "199507082021012005", "Kasir", "Kasir"),
+        ("STF-006", "Admin Sistem", "199001012015011006", "Admin", ""),
+        ("STF-007", "drg. Maya Kusuma", "", "Dokter Gigi", "Gigi"),
+        ("STF-008", "Bidan Sari Handayani", "", "Bidan", "Cempaka"),
+        ("STF-009", "dr. Andi Wijaya", "", "Dokter Umum", "IGD"),
+    ];
+    for (id, name, nip, role, poli) in staff {
+        sqlx::query(
+            "INSERT INTO staff (id, name, nip, role, poli, phone, active)
+             VALUES (?, ?, ?, ?, ?, '', 1)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(nip)
+        .bind(role)
+        .bind(poli)
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+    // (id, staff, shift, poli)
+    let shifts: [(&str, &str, &str, &str); 8] = [
+        ("SHF-20261119-001", "STF-001", "Pagi", "Poli Umum"),
+        ("SHF-20261119-002", "STF-002", "Pagi", "Poli Umum"),
+        ("SHF-20261119-003", "STF-003", "Siang", "Penyakit Dalam"),
+        ("SHF-20261119-004", "STF-007", "Pagi", "Gigi"),
+        ("SHF-20261119-005", "STF-008", "Pagi", "Cempaka"),
+        ("SHF-20261119-006", "STF-004", "Pagi", "Farmasi"),
+        ("SHF-20261119-007", "STF-005", "Pagi", "Kasir"),
+        ("SHF-20261119-008", "STF-009", "Malam", "IGD"),
+    ];
+    for (id, staff_id, shift, poli) in shifts {
+        sqlx::query(
+            "INSERT INTO shift_schedules (id, staff_id, date, shift, poli, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(staff_id)
+        .bind(today.to_string())
+        .bind(shift)
+        .bind(poli)
+        .bind(t(7, 0))
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+
+    // -- Pengaturan seed ---------------------------------------------------------
+    let settings: [(&str, &str); 4] = [
+        ("backup_otomatis", "on"),
+        ("sinkron_satusehat", "on"),
+        ("mode_offline", "off"),
+        ("retensi_audit_hari", "365"),
+    ];
+    for (key, value) in settings {
+        sqlx::query(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?)",
+        )
+        .bind(key)
+        .bind(value)
+        .bind(t(7, 30))
+        .execute(&db.pool)
+        .await
+        .map_err(db_err)?;
+    }
+
+    // API keys: TIDAK ADA seed (kunci dibuat admin saat runtime, FASE4.md §4.2).
+
+    Ok(true)
+}
+
+impl Db {
+    /// Seed Fase 4 bila tabel `hd_machines` masih kosong (FASE4.md §4.2).
+    ///
+    /// Alasan sama seperti Fase 2/3: `seed()` hanya dipanggil
+    /// `seed_if_empty` bila `users` kosong. DB lama yang mendapat
+    /// migrasi 0006 tidak pernah menjalankan `seed()` lagi. Dipanggil
+    /// binary sekali saat boot, tepat setelah `seed_fase3_if_empty()`.
+    /// Mengembalikan `true` bila seed dijalankan.
+    pub async fn seed_fase4_if_empty(&self) -> Result<bool, waras_core::WarasError> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM hd_machines")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db_err)?;
+        if n > 0 {
+            return Ok(false);
+        }
+        seed_fase4(self).await?;
+        Ok(true)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1411,8 +1843,8 @@ mod tests {
     #[tokio::test]
     async fn seed_fase3_counts() {
         let db = seeded_db().await;
-        // Pasien baru Fase 3.
-        assert_eq!(db.list_patients(None).await.unwrap().len(), 12);
+        // Pasien baru Fase 3 + Fase 4 (seed() menjalankan keduanya).
+        assert_eq!(db.list_patients(None).await.unwrap().len(), 14);
         assert!(db.get_patient("RM-000822").await.unwrap().is_some());
         assert!(db.get_patient("RM-000823").await.unwrap().is_some());
         // Encounter fast-track IGD.
@@ -1456,5 +1888,90 @@ mod tests {
         assert!(!seed_fase3(&db).await.unwrap());
         assert!(!db.seed_fase3_if_empty().await.unwrap());
         assert_eq!(db.list_ward_beds(None).await.unwrap().len(), 120);
+    }
+
+    #[tokio::test]
+    async fn seed_fase4_counts() {
+        let db = seeded_db().await;
+        // Pasien baru Fase 4; pasien berikutnya jadi RM-000826.
+        assert_eq!(db.list_patients(None).await.unwrap().len(), 14);
+        assert!(db.get_patient("RM-000824").await.unwrap().is_some());
+        assert!(db.get_patient("RM-000825").await.unwrap().is_some());
+        let slamet = db.get_patient("RM-000824").await.unwrap().unwrap();
+        assert_eq!(slamet.name, "Slamet Riyadi");
+        assert_eq!(slamet.nik, "3374031005720013");
+        let conds = db.get_conditions("RM-000824").await.unwrap();
+        assert_eq!(conds.len(), 1);
+        assert_eq!(conds[0].code, "N18.9");
+        let next = db
+            .create_patient(crate::NewPatient {
+                nik: "3374010101900001".into(),
+                name: "Test Pasien".into(),
+                birth_date: NaiveDate::from_ymd_opt(1990, 1, 1).unwrap(),
+                gender: Gender::LakiLaki,
+                address: "Jl. Test No. 1".into(),
+                phone: None,
+                blood_type: None,
+                bpjs_number: None,
+                insurance: Insurance::Umum,
+            })
+            .await
+            .unwrap();
+        assert_eq!(next.id, "RM-000826");
+        // Tabel Fase 4.
+        assert_eq!(db.list_hd_machines().await.unwrap().len(), 4);
+        assert_eq!(
+            db.list_hd_sessions(&clinic_today().to_string())
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        assert_eq!(db.list_blood_stock().await.unwrap().len(), 8);
+        assert_eq!(db.list_blood_requests(None).await.unwrap().len(), 2);
+        assert_eq!(
+            db.list_crossmatches("TR-20261119-002").await.unwrap().len(),
+            1
+        );
+        assert_eq!(db.list_nutrition_assessments(None).await.unwrap().len(), 4);
+        assert_eq!(db.list_nutrition_diets(None).await.unwrap().len(), 3);
+        assert_eq!(db.list_dental_records(None).await.unwrap().len(), 5);
+        assert_eq!(db.list_inventory_items().await.unwrap().len(), 10);
+        assert_eq!(db.list_inventory_moves(None).await.unwrap().len(), 3);
+        assert_eq!(db.list_staff().await.unwrap().len(), 9);
+        assert_eq!(
+            db.list_shifts(&clinic_today().to_string())
+                .await
+                .unwrap()
+                .len(),
+            8
+        );
+        assert_eq!(db.list_settings().await.unwrap().len(), 4);
+        // Sesi pasien (portal): token tidak bisa dipakai sebagai staf.
+        let token = db
+            .create_patient_session("RM-000824")
+            .await
+            .unwrap();
+        assert_eq!(token.len(), 64);
+        let owner = db.find_patient_by_token(&token).await.unwrap().unwrap();
+        assert_eq!(owner.id, "RM-000824");
+        assert!(db.find_user_by_token(&token).await.unwrap().is_none());
+        assert_eq!(
+            db.find_patient_by_nik("3374031005720013")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "RM-000824"
+        );
+        assert!(db
+            .find_patient_by_nik("0000000000000000")
+            .await
+            .unwrap()
+            .is_none());
+        // Idempotent: panggilan kedua tidak menambah apa-apa.
+        assert!(!seed_fase4(&db).await.unwrap());
+        assert!(!db.seed_fase4_if_empty().await.unwrap());
+        assert_eq!(db.list_patients(None).await.unwrap().len(), 15);
     }
 }

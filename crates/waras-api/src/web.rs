@@ -89,6 +89,51 @@ pub async fn serve_casemix() -> Response {
     serve_asset("casemix.html")
 }
 
+// -- UI Fase 4 (FASE4.md §5.3) ------------------------------------------
+pub async fn serve_hemodialisa() -> Response {
+    serve_asset("hemodialisa.html")
+}
+
+pub async fn serve_transfusi() -> Response {
+    serve_asset("transfusi.html")
+}
+
+pub async fn serve_gizi() -> Response {
+    serve_asset("gizi.html")
+}
+
+pub async fn serve_gigi() -> Response {
+    serve_asset("gigi.html")
+}
+
+pub async fn serve_portal() -> Response {
+    serve_asset("portal.html")
+}
+
+pub async fn serve_api_publik() -> Response {
+    serve_asset("api_publik.html")
+}
+
+pub async fn serve_inventori() -> Response {
+    serve_asset("inventori.html")
+}
+
+pub async fn serve_kepegawaian() -> Response {
+    serve_asset("kepegawaian.html")
+}
+
+pub async fn serve_laporan() -> Response {
+    serve_asset("laporan.html")
+}
+
+pub async fn serve_pengaturan() -> Response {
+    serve_asset("pengaturan.html")
+}
+
+pub async fn serve_rawat_jalan() -> Response {
+    serve_asset("rawat_jalan.html")
+}
+
 pub async fn serve_tile() -> Response {
     serve_asset("waras-tile-sharp.png")
 }

@@ -71,6 +71,22 @@ impl Db {
         row.map(|r| r.into_domain()).transpose()
     }
 
+    /// Semua order lab milik satu pasien, terbaru dulu (portal pasien).
+    pub async fn list_lab_orders_by_patient(
+        &self,
+        patient_id: &str,
+    ) -> Result<Vec<LabOrder>, WarasError> {
+        let rows: Vec<LabOrderRow> = sqlx::query_as(
+            "SELECT * FROM lab_orders WHERE patient_id = ?
+             ORDER BY created_at DESC, id DESC",
+        )
+        .bind(patient_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        rows.into_iter().map(|r| r.into_domain()).collect()
+    }
+
     /// Order lab baru: id `LAB-<seq>` (tanpa tanggal, sesuai desain;
     /// seed 2210..2217, berikutnya 2218).
     pub async fn create_lab_order(

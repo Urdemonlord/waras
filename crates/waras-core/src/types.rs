@@ -21,6 +21,9 @@ pub enum Role {
     Apoteker,
     Kasir,
     Admin,
+    /// Fase 4 (FASE4.md §2): pasien portal — hanya boleh `ViewPortal`.
+    /// Bukan pengguna staf; tidak pernah tersimpan di tabel `users`.
+    Pasien,
 }
 
 impl Role {
@@ -31,6 +34,7 @@ impl Role {
             Role::Apoteker => "Apoteker",
             Role::Kasir => "Kasir",
             Role::Admin => "Admin",
+            Role::Pasien => "Pasien",
         }
     }
 }
@@ -425,13 +429,20 @@ impl Drug {
     /// Status stok dari jumlah sisa. Ambang ini cocok dengan data desain:
     /// 12 Kritis, 15 Segera, 22 Segera, 3 Kritis, 540+ Aman.
     pub fn stock_status(&self) -> StockStatus {
-        if self.stock <= 12 {
-            StockStatus::Kritis
-        } else if self.stock <= 30 {
-            StockStatus::Segera
-        } else {
-            StockStatus::Aman
-        }
+        inventory_stock_status(self.stock)
+    }
+}
+
+/// Status stok dari jumlah sisa (dipakai `Drug::stock_status` dan
+/// inventori Fase 4 — ambang SAMA dengan Farmasi, FASE4.md §2).
+/// Label "Segera" di sini artinya segera restock, bukan "segera hadir".
+pub fn inventory_stock_status(stock: i64) -> StockStatus {
+    if stock <= 12 {
+        StockStatus::Kritis
+    } else if stock <= 30 {
+        StockStatus::Segera
+    } else {
+        StockStatus::Aman
     }
 }
 
@@ -1210,4 +1221,338 @@ pub struct RadReport {
     pub findings: String,
     pub radiologist: String,
     pub reported_at: NaiveDateTime,
+}
+
+// ---------------------------------------------------------------------------
+// Ekosistem (Fase 4): hemodialisa, transfusi darah, gizi, rekam medis gigi,
+// inventori, kepegawaian, laporan/SIRS, pengaturan, API publik, rawat jalan.
+// Lihat docs/FASE4.md §1–§2. Satu struct per tabel; status yang tidak
+// punya enum sendiri disimpan sebagai String (nilai persis FASE4.md §1).
+// ---------------------------------------------------------------------------
+
+// --- Hemodialisa -----------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HdMachineStatus {
+    Siap,
+    Terpakai,
+    Perawatan,
+}
+
+impl HdMachineStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            HdMachineStatus::Siap => "Siap",
+            HdMachineStatus::Terpakai => "Terpakai",
+            HdMachineStatus::Perawatan => "Perawatan",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HdMachine {
+    /// Mis. `HD-1`.
+    pub id: String,
+    /// Mis. `Mesin HD 1`.
+    pub name: String,
+    pub status: HdMachineStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HdSessionStatus {
+    Terjadwal,
+    Berjalan,
+    Selesai,
+    Batal,
+}
+
+impl HdSessionStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            HdSessionStatus::Terjadwal => "Terjadwal",
+            HdSessionStatus::Berjalan => "Berjalan",
+            HdSessionStatus::Selesai => "Selesai",
+            HdSessionStatus::Batal => "Batal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HdSession {
+    /// Mis. `HD-20261119-001`.
+    pub id: String,
+    pub patient_id: String,
+    pub machine_id: String,
+    pub encounter_id: Option<String>,
+    /// Mis. `F6`.
+    pub dialyzer: String,
+    pub duration_minutes: i64,
+    /// Aliran darah (mL/mnt).
+    pub blood_flow: i64,
+    /// Aliran dialisat (mL/mnt).
+    pub dialysate_flow: i64,
+    /// Target ultrafiltrasi (mL).
+    pub uf_goal_ml: i64,
+    pub status: HdSessionStatus,
+    /// `YYYY-MM-DD HH:MM`.
+    pub scheduled_at: String,
+    /// `YYYY-MM-DD HH:MM`, diisi saat sesi Berjalan.
+    pub started_at: Option<String>,
+    /// `YYYY-MM-DD HH:MM`, diisi saat sesi Selesai.
+    pub finished_at: Option<String>,
+    pub notes: String,
+    pub created_at: NaiveDateTime,
+}
+
+// --- Transfusi darah -------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BloodStock {
+    /// Mis. `BL-A-POS-001`.
+    pub id: String,
+    /// `A+` / `A-` / `B+` / `B-` / `O+` / `O-` / `AB+` / `AB-`.
+    pub blood_type: String,
+    /// `WB` / `PRC` / `TC` / `FFP`.
+    pub component: String,
+    pub units: i64,
+    pub expires_at: NaiveDate,
+    /// Dihitung dari `units` (repo): 0 Habis, <=2 Menipis, else Tersedia.
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BloodRequestStatus {
+    Menunggu,
+    Crossmatch,
+    Siap,
+    Diberikan,
+    Batal,
+}
+
+impl BloodRequestStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            BloodRequestStatus::Menunggu => "Menunggu",
+            BloodRequestStatus::Crossmatch => "Crossmatch",
+            BloodRequestStatus::Siap => "Siap",
+            BloodRequestStatus::Diberikan => "Diberikan",
+            BloodRequestStatus::Batal => "Batal",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BloodRequest {
+    /// Mis. `TR-20261119-001`.
+    pub id: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    pub blood_type: String,
+    pub component: String,
+    pub units: i64,
+    pub reason: String,
+    pub status: BloodRequestStatus,
+    pub requested_by: String,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BloodCrossmatch {
+    /// Mis. `XM-000001`.
+    pub id: String,
+    pub request_id: String,
+    /// Id `blood_stock` (kantong yang diuji).
+    pub bag_id: String,
+    /// `Cocok` / `Tidak Cocok`.
+    pub result: String,
+    pub tested_by: String,
+    pub tested_at: NaiveDateTime,
+}
+
+// --- Gizi ------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NutritionAssessment {
+    /// Mis. `GZ-000001`.
+    pub id: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    pub weight_kg: f64,
+    pub height_cm: f64,
+    /// Dihitung server: berat / (tinggi_m^2), 1 desimal.
+    pub bmi: f64,
+    /// `Kurus` / `Normal` / `Gemuk` / `Obesitas` (lihat `nutrition`).
+    pub imt_category: String,
+    /// `Rendah` / `Sedang` / `Tinggi`.
+    pub risk: String,
+    /// Mis. `DM 1800 kkal`.
+    pub diet: String,
+    pub notes: String,
+    pub assessed_by: String,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NutritionDiet {
+    /// Mis. `DT-000001`.
+    pub id: String,
+    pub patient_id: String,
+    /// `DM` / `Jantung` / `Rendah Garam` / `Tinggi Protein` / `Biasa`.
+    pub diet_type: String,
+    pub calories: i64,
+    pub notes: String,
+    pub start_date: NaiveDate,
+    /// `Aktif` / `Selesai`.
+    pub status: String,
+}
+
+// --- Rekam medis gigi ------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DentalRecord {
+    /// Mis. `GG-000001`.
+    pub id: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    /// Notasi FDI: 11–18, 21–28, 31–38, 41–48.
+    pub tooth_number: String,
+    pub diagnosis: String,
+    /// ICD-10, mis. `K02.9`.
+    pub diagnosis_code: String,
+    pub treatment: String,
+    /// ICD-9-CM, mis. `23.2`.
+    pub treatment_code: String,
+    pub dentist: String,
+    /// `Rencana` / `Berjalan` / `Selesai`.
+    pub status: String,
+    pub created_at: NaiveDateTime,
+}
+
+// --- Inventori -------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InventoryItem {
+    /// Mis. `INV-ITM-001`.
+    pub id: String,
+    pub name: String,
+    /// `Obat` / `Alkes` / `Umum`.
+    pub category: String,
+    /// `pcs` / `box` / `botol`.
+    pub unit: String,
+    pub stock: i64,
+    pub min_stock: i64,
+    /// Mis. `Gudang A` / `Rak C-01`.
+    pub location: String,
+    /// `YYYY-MM-DD`, boleh kosong.
+    pub expiry: String,
+    pub created_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InventoryMove {
+    /// Mis. `INM-000001`.
+    pub id: String,
+    pub item_id: String,
+    /// `Masuk` / `Keluar` / `Opname`.
+    pub kind: String,
+    pub qty: i64,
+    pub note: String,
+    pub by_name: String,
+    pub created_at: NaiveDateTime,
+}
+
+// --- Kepegawaian -----------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Staff {
+    /// Mis. `STF-001`.
+    pub id: String,
+    pub name: String,
+    pub nip: String,
+    /// `Dokter Umum` / `Perawat` / `Apoteker` / `Kasir` / `Admin` /
+    /// `Bidan` / `Dokter Gigi`.
+    pub role: String,
+    pub poli: String,
+    pub phone: String,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShiftSchedule {
+    /// Mis. `SHF-20261119-001`.
+    pub id: String,
+    pub staff_id: String,
+    pub date: NaiveDate,
+    /// `Pagi` / `Siang` / `Malam`.
+    pub shift: String,
+    pub poli: String,
+    pub created_at: NaiveDateTime,
+}
+
+// --- Pengaturan & API publik -----------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSetting {
+    /// Mis. `backup_otomatis` (kunci hanya yang terdaftar FASE4.md §4.1).
+    pub key: String,
+    /// `on` / `off` / angka / teks.
+    pub value: String,
+    pub updated_at: NaiveDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKey {
+    /// Mis. `AK-000001`.
+    pub id: String,
+    /// Mis. `Aplikasi Mobile JKN`.
+    pub name: String,
+    /// 12 karakter pertama kunci, mis. `wrs_9f2k...`.
+    pub key_prefix: String,
+    /// SHA-256 hex dari kunci penuh. TIDAK PERNAH diserialisasi —
+    /// kunci penuh tidak pernah disimpan di mana pun.
+    #[serde(skip_serializing)]
+    pub key_hash: String,
+    /// Dipisah koma: `patients:read,queue:read,encounters:read,fhir:read`.
+    pub scopes: String,
+    pub created_by: String,
+    pub created_at: NaiveDateTime,
+    pub last_used_at: Option<NaiveDateTime>,
+    pub revoked: bool,
+}
+
+// --- Laporan & SIRS (agregat, tanpa tabel baru) ----------------------------
+
+/// Ringkasan SIRS (FASE4.md §4): RL1 kunjungan hari ini + rawat
+/// jalan/inap; RL2 10 besar penyakit; RL3 hunian bed + lab menunggu.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SirsSummary {
+    pub visits_today: i64,
+    pub outpatient_today: i64,
+    pub inpatient_today: i64,
+    pub beds_occupied: i64,
+    pub beds_total: i64,
+    pub lab_pending: i64,
+    pub top_diseases: Vec<(String, String, i64)>,
+}
+
+// --- Rawat jalan (agregat, tanpa tabel baru) -------------------------------
+
+/// Satu baris kunjungan rawat jalan: gabungan antrean + encounter +
+/// janji hari itu, satu baris per pasien+poli (FASE4.md §4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutpatientVisit {
+    pub patient_id: String,
+    pub patient_name: String,
+    /// Nomor RM (= `patient_id`).
+    pub rm: String,
+    pub poli: String,
+    pub doctor: String,
+    /// Jam kunjungan (`HH.MM` antrean/encounter, jam konsultasi janji).
+    pub time: String,
+    /// `Antrean` / `Encounter` / `Janji`.
+    pub source: String,
+    pub status: String,
 }

@@ -7,12 +7,15 @@ use crate::{parse_date, parse_dt};
 use sqlx::FromRow;
 use waras_core::{
     types::{
-        Admission, AdmissionStatus, AllergyIntolerance, Appointment, AuditEntry, BedStatus,
-        CareNote, Condition, DailyStat, Delivery, DeliveryRoom, Drug, Encounter, IgdObservation,
-        IgdStatus, IgdVisit, Invoice, LabFlag, LabOrder, LabOrderStatus, LabResult,
-        MedicationRequest, Notification, Observation, Patient, Payment, QueueEntry, RadOrder,
-        RadOrderStatus, RadReport, SoapNote, SoapVersion, Surgery, SurgeryStatus, TriageLevel,
-        User, Ward, WardBed,
+        Admission, AdmissionStatus, AllergyIntolerance, ApiKey, AppSetting, Appointment,
+        AuditEntry, BedStatus, BloodCrossmatch, BloodRequest, BloodRequestStatus, BloodStock,
+        CareNote, Condition, DailyStat, Delivery, DeliveryRoom, DentalRecord, Drug, Encounter,
+        HdMachine, HdMachineStatus, HdSession, HdSessionStatus, IgdObservation, IgdStatus,
+        IgdVisit, InventoryItem, InventoryMove, Invoice, LabFlag, LabOrder, LabOrderStatus,
+        LabResult, MedicationRequest, Notification, NutritionAssessment, NutritionDiet,
+        Observation, Patient, Payment, QueueEntry, RadOrder, RadOrderStatus, RadReport,
+        ShiftSchedule, SoapNote, SoapVersion, Staff, Surgery, SurgeryStatus, TriageLevel, User,
+        Ward, WardBed,
     },
     WarasError,
 };
@@ -1001,6 +1004,436 @@ impl RadReportRow {
             findings: self.findings,
             radiologist: self.radiologist,
             reported_at: parse_dt(&self.reported_at)?,
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Fase 4 (FASE4.md §1–§2): baris tabel hemodialisa / transfusi / gizi /
+// gigi / inventori / kepegawaian / pengaturan / kunci API.
+// ---------------------------------------------------------------------------
+
+/// Dipakai agen API (pengaturan kunci) — disimpan di sini supaya
+/// konversi status mesin HD konsisten dengan `*_from_str`.
+#[allow(dead_code)]
+pub(crate) fn hd_machine_status_to_str(s: HdMachineStatus) -> &'static str {
+    match s {
+        HdMachineStatus::Siap => "siap",
+        HdMachineStatus::Terpakai => "terpakai",
+        HdMachineStatus::Perawatan => "perawatan",
+    }
+}
+pub(crate) fn hd_machine_status_from_str(s: &str) -> Result<HdMachineStatus, WarasError> {
+    Ok(match s {
+        "siap" => HdMachineStatus::Siap,
+        "terpakai" => HdMachineStatus::Terpakai,
+        "perawatan" => HdMachineStatus::Perawatan,
+        _ => return Err(bad_fase3("hd_machine_status", s)),
+    })
+}
+
+pub(crate) fn hd_session_status_to_str(s: HdSessionStatus) -> &'static str {
+    match s {
+        HdSessionStatus::Terjadwal => "terjadwal",
+        HdSessionStatus::Berjalan => "berjalan",
+        HdSessionStatus::Selesai => "selesai",
+        HdSessionStatus::Batal => "batal",
+    }
+}
+pub(crate) fn hd_session_status_from_str(s: &str) -> Result<HdSessionStatus, WarasError> {
+    Ok(match s {
+        "terjadwal" => HdSessionStatus::Terjadwal,
+        "berjalan" => HdSessionStatus::Berjalan,
+        "selesai" => HdSessionStatus::Selesai,
+        "batal" => HdSessionStatus::Batal,
+        _ => return Err(bad_fase3("hd_session_status", s)),
+    })
+}
+
+pub(crate) fn blood_request_status_to_str(s: BloodRequestStatus) -> &'static str {
+    match s {
+        BloodRequestStatus::Menunggu => "menunggu",
+        BloodRequestStatus::Crossmatch => "crossmatch",
+        BloodRequestStatus::Siap => "siap",
+        BloodRequestStatus::Diberikan => "diberikan",
+        BloodRequestStatus::Batal => "batal",
+    }
+}
+pub(crate) fn blood_request_status_from_str(s: &str) -> Result<BloodRequestStatus, WarasError> {
+    Ok(match s {
+        "menunggu" => BloodRequestStatus::Menunggu,
+        "crossmatch" => BloodRequestStatus::Crossmatch,
+        "siap" => BloodRequestStatus::Siap,
+        "diberikan" => BloodRequestStatus::Diberikan,
+        "batal" => BloodRequestStatus::Batal,
+        _ => return Err(bad_fase3("blood_request_status", s)),
+    })
+}
+
+#[derive(Debug, FromRow)]
+pub struct HdMachineRow {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+}
+impl HdMachineRow {
+    pub fn into_domain(self) -> Result<HdMachine, WarasError> {
+        Ok(HdMachine {
+            id: self.id,
+            name: self.name,
+            status: hd_machine_status_from_str(&self.status)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct HdSessionRow {
+    pub id: String,
+    pub patient_id: String,
+    pub machine_id: String,
+    pub encounter_id: Option<String>,
+    pub dialyzer: String,
+    pub duration_minutes: i64,
+    pub blood_flow: i64,
+    pub dialysate_flow: i64,
+    pub uf_goal_ml: i64,
+    pub status: String,
+    pub scheduled_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub notes: String,
+    pub created_at: String,
+}
+impl HdSessionRow {
+    pub fn into_domain(self) -> Result<HdSession, WarasError> {
+        Ok(HdSession {
+            id: self.id,
+            patient_id: self.patient_id,
+            machine_id: self.machine_id,
+            encounter_id: self.encounter_id,
+            dialyzer: self.dialyzer,
+            duration_minutes: self.duration_minutes,
+            blood_flow: self.blood_flow,
+            dialysate_flow: self.dialysate_flow,
+            uf_goal_ml: self.uf_goal_ml,
+            status: hd_session_status_from_str(&self.status)?,
+            scheduled_at: self.scheduled_at,
+            started_at: self.started_at,
+            finished_at: self.finished_at,
+            notes: self.notes,
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct BloodStockRow {
+    pub id: String,
+    pub blood_type: String,
+    pub component: String,
+    pub units: i64,
+    pub expires_at: String,
+    pub status: String,
+}
+impl BloodStockRow {
+    pub fn into_domain(self) -> Result<BloodStock, WarasError> {
+        Ok(BloodStock {
+            id: self.id,
+            blood_type: self.blood_type,
+            component: self.component,
+            units: self.units,
+            expires_at: parse_date(&self.expires_at)?,
+            status: self.status,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct BloodRequestRow {
+    pub id: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    pub blood_type: String,
+    pub component: String,
+    pub units: i64,
+    pub reason: String,
+    pub status: String,
+    pub requested_by: String,
+    pub created_at: String,
+}
+impl BloodRequestRow {
+    pub fn into_domain(self) -> Result<BloodRequest, WarasError> {
+        Ok(BloodRequest {
+            id: self.id,
+            patient_id: self.patient_id,
+            encounter_id: self.encounter_id,
+            blood_type: self.blood_type,
+            component: self.component,
+            units: self.units,
+            reason: self.reason,
+            status: blood_request_status_from_str(&self.status)?,
+            requested_by: self.requested_by,
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct BloodCrossmatchRow {
+    pub id: String,
+    pub request_id: String,
+    pub bag_id: String,
+    pub result: String,
+    pub tested_by: String,
+    pub tested_at: String,
+}
+impl BloodCrossmatchRow {
+    pub fn into_domain(self) -> Result<BloodCrossmatch, WarasError> {
+        Ok(BloodCrossmatch {
+            id: self.id,
+            request_id: self.request_id,
+            bag_id: self.bag_id,
+            result: self.result,
+            tested_by: self.tested_by,
+            tested_at: parse_dt(&self.tested_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct NutritionAssessmentRow {
+    pub id: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    pub weight_kg: f64,
+    pub height_cm: f64,
+    pub bmi: f64,
+    pub imt_category: String,
+    pub risk: String,
+    pub diet: String,
+    pub notes: String,
+    pub assessed_by: String,
+    pub created_at: String,
+}
+impl NutritionAssessmentRow {
+    pub fn into_domain(self) -> Result<NutritionAssessment, WarasError> {
+        Ok(NutritionAssessment {
+            id: self.id,
+            patient_id: self.patient_id,
+            encounter_id: self.encounter_id,
+            weight_kg: self.weight_kg,
+            height_cm: self.height_cm,
+            bmi: self.bmi,
+            imt_category: self.imt_category,
+            risk: self.risk,
+            diet: self.diet,
+            notes: self.notes,
+            assessed_by: self.assessed_by,
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct NutritionDietRow {
+    pub id: String,
+    pub patient_id: String,
+    pub diet_type: String,
+    pub calories: i64,
+    pub notes: String,
+    pub start_date: String,
+    pub status: String,
+}
+impl NutritionDietRow {
+    pub fn into_domain(self) -> Result<NutritionDiet, WarasError> {
+        Ok(NutritionDiet {
+            id: self.id,
+            patient_id: self.patient_id,
+            diet_type: self.diet_type,
+            calories: self.calories,
+            notes: self.notes,
+            start_date: parse_date(&self.start_date)?,
+            status: self.status,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct DentalRecordRow {
+    pub id: String,
+    pub patient_id: String,
+    pub encounter_id: Option<String>,
+    pub tooth_number: String,
+    pub diagnosis: String,
+    pub diagnosis_code: String,
+    pub treatment: String,
+    pub treatment_code: String,
+    pub dentist: String,
+    pub status: String,
+    pub created_at: String,
+}
+impl DentalRecordRow {
+    pub fn into_domain(self) -> Result<DentalRecord, WarasError> {
+        Ok(DentalRecord {
+            id: self.id,
+            patient_id: self.patient_id,
+            encounter_id: self.encounter_id,
+            tooth_number: self.tooth_number,
+            diagnosis: self.diagnosis,
+            diagnosis_code: self.diagnosis_code,
+            treatment: self.treatment,
+            treatment_code: self.treatment_code,
+            dentist: self.dentist,
+            status: self.status,
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct InventoryItemRow {
+    pub id: String,
+    pub name: String,
+    pub category: String,
+    pub unit: String,
+    pub stock: i64,
+    pub min_stock: i64,
+    pub location: String,
+    pub expiry: String,
+    pub created_at: String,
+}
+impl InventoryItemRow {
+    pub fn into_domain(self) -> Result<InventoryItem, WarasError> {
+        Ok(InventoryItem {
+            id: self.id,
+            name: self.name,
+            category: self.category,
+            unit: self.unit,
+            stock: self.stock,
+            min_stock: self.min_stock,
+            location: self.location,
+            expiry: self.expiry,
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct InventoryMoveRow {
+    pub id: String,
+    pub item_id: String,
+    pub kind: String,
+    pub qty: i64,
+    pub note: String,
+    pub by_name: String,
+    pub created_at: String,
+}
+impl InventoryMoveRow {
+    pub fn into_domain(self) -> Result<InventoryMove, WarasError> {
+        Ok(InventoryMove {
+            id: self.id,
+            item_id: self.item_id,
+            kind: self.kind,
+            qty: self.qty,
+            note: self.note,
+            by_name: self.by_name,
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct StaffRow {
+    pub id: String,
+    pub name: String,
+    pub nip: String,
+    pub role: String,
+    pub poli: String,
+    pub phone: String,
+    pub active: i64,
+}
+impl StaffRow {
+    pub fn into_domain(self) -> Result<Staff, WarasError> {
+        Ok(Staff {
+            id: self.id,
+            name: self.name,
+            nip: self.nip,
+            role: self.role,
+            poli: self.poli,
+            phone: self.phone,
+            active: self.active != 0,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct ShiftScheduleRow {
+    pub id: String,
+    pub staff_id: String,
+    pub date: String,
+    pub shift: String,
+    pub poli: String,
+    pub created_at: String,
+}
+impl ShiftScheduleRow {
+    pub fn into_domain(self) -> Result<ShiftSchedule, WarasError> {
+        Ok(ShiftSchedule {
+            id: self.id,
+            staff_id: self.staff_id,
+            date: parse_date(&self.date)?,
+            shift: self.shift,
+            poli: self.poli,
+            created_at: parse_dt(&self.created_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+pub struct AppSettingRow {
+    pub key: String,
+    pub value: String,
+    pub updated_at: String,
+}
+impl AppSettingRow {
+    pub fn into_domain(self) -> Result<AppSetting, WarasError> {
+        Ok(AppSetting {
+            key: self.key,
+            value: self.value,
+            updated_at: parse_dt(&self.updated_at)?,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+/// Baris `api_keys`; repo pembuatan kunci ada di agen API Publik.
+#[allow(dead_code)]
+pub struct ApiKeyRow {
+    pub id: String,
+    pub name: String,
+    pub key_prefix: String,
+    pub key_hash: String,
+    pub scopes: String,
+    pub created_by: String,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub revoked: i64,
+}
+#[allow(dead_code)]
+impl ApiKeyRow {
+    pub fn into_domain(self) -> Result<ApiKey, WarasError> {
+        Ok(ApiKey {
+            id: self.id,
+            name: self.name,
+            key_prefix: self.key_prefix,
+            key_hash: self.key_hash,
+            scopes: self.scopes,
+            created_by: self.created_by,
+            created_at: parse_dt(&self.created_at)?,
+            last_used_at: match self.last_used_at {
+                Some(d) => Some(parse_dt(&d)?),
+                None => None,
+            },
+            revoked: self.revoked != 0,
         })
     }
 }

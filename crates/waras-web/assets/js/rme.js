@@ -307,7 +307,7 @@
     document.getElementById('btn-batal').addEventListener('click', function () { location.reload(); });
     document.getElementById('btn-cetak').addEventListener('click', function () { window.print(); });
     document.getElementById('btn-unduh').addEventListener('click', function () {
-      Waras.toast('Unduh RME (PDF) segera hadir di Fase 2.');
+      Waras.toast('Unduh RME (PDF) belum tersedia.');
     });
     document.getElementById('btn-tutup').addEventListener('click', function () { location.href = '/dashboard'; });
   });

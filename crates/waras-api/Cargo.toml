@@ -17,6 +17,10 @@ serde_json.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+# Agen D (Fase 4): SHA-256 kunci API + RNG kriptografis untuk generate
+# kunci `wrs_...` (keduanya sudah di workspace/cache, bukan dep baru).
+sha2.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 # Hanya untuk test (oneshot): tower 0.5.3 sudah ada di cache registry.

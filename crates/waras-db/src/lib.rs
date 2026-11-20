@@ -18,6 +18,7 @@
 //! SQLx dipakai lewat `sqlx::query` / `query_as` + `FromRow` saja.
 //! Tidak ada macro `query!`/`query_as!` (butuh DB saat compile).
 
+mod api_keys;
 mod audit;
 mod casemix;
 mod claims;
@@ -26,20 +27,29 @@ mod dashboard;
 mod drugs;
 mod encounters;
 mod fhir_data;
+mod gigi;
+mod gizi;
+mod hemodialisa;
 mod igd;
+mod inventori;
 mod invoices;
+mod kepegawaian;
 mod lab;
+mod laporan;
 mod notifications;
 mod operasi;
 mod outbox;
 mod patients;
+mod pengaturan;
 mod prescriptions;
 mod queue;
 mod radiologi;
 mod ranap;
+mod rawat_jalan;
 mod rows;
 mod seed;
 mod seps;
+mod transfusi;
 mod users;
 
 pub use lab::NewLabResult;
@@ -810,7 +820,7 @@ mod tests {
         db.migrate().await.expect("migrasi PG");
         db.seed_if_empty().await.expect("seed PG");
         let patients = db.list_patients(None).await.expect("list pasien PG");
-        assert_eq!(patients.len(), 12, "seed Fase 1 + 2 pasien Fase 3");
+        assert_eq!(patients.len(), 14, "seed Fase 1 + 2 pasien Fase 3 + 2 pasien Fase 4");
         // Transaksi + placeholder `?` di mode Postgres: klaim batch
         // outbox (kosong) — membuktikan begin/commit + rewrite jalan.
         let jobs = db
@@ -836,7 +846,7 @@ mod tests {
     async fn seed_loads_exact_counts() {
         let db = seeded_db().await;
         let patients = db.list_patients(None).await.unwrap();
-        assert_eq!(patients.len(), 12);
+        assert_eq!(patients.len(), 14);
         let queue = db.list_queue(clinic_today()).await.unwrap();
         assert_eq!(queue.len(), 44);
         let rx = db
@@ -868,7 +878,7 @@ mod tests {
     async fn seed_is_idempotent() {
         let db = seeded_db().await;
         assert!(!db.seed_if_empty().await.unwrap(), "seed kedua harus skip");
-        assert_eq!(db.list_patients(None).await.unwrap().len(), 12);
+        assert_eq!(db.list_patients(None).await.unwrap().len(), 14);
     }
 
     #[tokio::test]
@@ -1093,8 +1103,8 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(p.id, "RM-000824");
-        let found = db.get_patient("RM-000824").await.unwrap().unwrap();
+        assert_eq!(p.id, "RM-000826");
+        let found = db.get_patient("RM-000826").await.unwrap().unwrap();
         assert_eq!(found.name, "Test Pasien");
     }
 

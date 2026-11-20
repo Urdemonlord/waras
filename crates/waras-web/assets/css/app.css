@@ -330,3 +330,23 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 }
 #toast.on { display: block; }
 #toast.err { background: var(--red); }
+
+/* ---- Modal (FASE4.md §6) ---- */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(26, 32, 39, .55); z-index: 50;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+.modal-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 16px; max-width: 560px; width: 100%; max-height: 85vh; overflow: auto;
+}
+.modal-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.modal-head h2 { flex: 1; }
+.modal-x {
+  border: 1px solid var(--border); border-radius: 6px; background: #fff;
+  width: 30px; height: 30px; font-size: 18px; line-height: 1; cursor: pointer; color: var(--ink2);
+}
+.modal-x:hover { background: #F4F5F6; }
+.modal-body { font-size: 13px; }
+.modal-body p { margin: 0 0 8px; }
+.modal-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; justify-content: flex-end; }

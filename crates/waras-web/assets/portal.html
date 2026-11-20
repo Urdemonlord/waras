@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portal Pasien — WARAS</title>
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body data-page="portal">
+<div class="shell">
+<aside class="sidebar">
+  <div class="brand">
+    <img src="/waras-tile-sharp.png" alt="Logo WARAS">
+    <div><div class="name">WARAS</div><div class="sub">SIMRS open source · v1.0</div></div>
+  </div>
+  <nav class="nav">
+<div class="nav-group">PELAYANAN</div>
+<a class="nav-item" data-nav="dashboard" href="/dashboard"><img class="ic" src="/icons/house-CBD5E1.png" alt="">Dashboard</a>
+<a class="nav-item" data-nav="registrasi" href="/registrasi"><img class="ic" src="/icons/pencil-CBD5E1.png" alt="">Registrasi & Antrean</a>
+<a class="nav-item" data-nav="rme" href="/rme?pasien=RM-000812"><img class="ic" src="/icons/stethoscope-CBD5E1.png" alt="">Rekam Medis (RME)</a>
+<a class="nav-item" data-nav="rawat_jalan" href="/rawat-jalan"><img class="ic" src="/icons/arrow-right-CBD5E1.png" alt="">Rawat Jalan</a>
+<a class="nav-item" data-nav="igd" href="/igd"><img class="ic" src="/icons/zap-CBD5E1.png" alt="">IGD</a>
+<a class="nav-item" data-nav="ranap" href="/ranap"><img class="ic" src="/icons/heart-pulse-CBD5E1.png" alt="">Rawat Inap</a>
+<a class="nav-item" data-nav="operasi" href="/operasi"><img class="ic" src="/icons/scissors-CBD5E1.png" alt="">Kamar Operasi & Bersalin</a>
+<a class="nav-item" data-nav="farmasi" href="/farmasi"><img class="ic" src="/icons/cross-CBD5E1.png" alt="">Farmasi</a>
+<a class="nav-item" data-nav="lab" href="/lab"><img class="ic" src="/icons/flask-conical-CBD5E1.png" alt="">Laboratorium</a>
+<a class="nav-item" data-nav="radiologi" href="/radiologi"><img class="ic" src="/icons/crosshair-CBD5E1.png" alt="">Radiologi</a>
+<a class="nav-item" data-nav="hemodialisa" href="/hemodialisa"><img class="ic" src="/icons/droplets-CBD5E1.png" alt="">Hemodialisa</a>
+<a class="nav-item" data-nav="transfusi" href="/transfusi"><img class="ic" src="/icons/droplet-CBD5E1.png" alt="">Transfusi Darah</a>
+<a class="nav-item" data-nav="gizi" href="/gizi"><img class="ic" src="/icons/apple-CBD5E1.png" alt="">Gizi</a>
+<a class="nav-item" data-nav="gigi" href="/gigi"><img class="ic" src="/icons/smile-CBD5E1.png" alt="">Rekam Medis Gigi</a>
+<a class="nav-item" data-nav="portal" href="/portal"><img class="ic" src="/icons/circle-user-round-CBD5E1.png" alt="">Portal Pasien</a>
+<div class="nav-group">KEUANGAN</div>
+<a class="nav-item" data-nav="billing" href="/billing"><img class="ic" src="/icons/scale-CBD5E1.png" alt="">Billing & Kasir</a>
+<a class="nav-item" data-nav="casemix" href="/casemix"><img class="ic" src="/icons/copy-CBD5E1.png" alt="">Casemix (INA-CBG)</a>
+<div class="nav-group">OPERASIONAL</div>
+<a class="nav-item" data-nav="inventori" href="/inventori"><img class="ic" src="/icons/layout-grid-CBD5E1.png" alt="">Inventori</a>
+<a class="nav-item" data-nav="kepegawaian" href="/kepegawaian"><img class="ic" src="/icons/users-CBD5E1.png" alt="">Kepegawaian</a>
+<a class="nav-item" data-nav="laporan" href="/laporan"><img class="ic" src="/icons/file-text-CBD5E1.png" alt="">Laporan & SIRS</a>
+<div class="nav-group">INTEGRASI</div>
+<a class="nav-item" data-nav="satusehat" href="/satusehat"><img class="ic" src="/icons/rotate-cw-CBD5E1.png" alt="">SATUSEHAT (FHIR)</a>
+<a class="nav-item" data-nav="bpjs" href="/bpjs"><img class="ic" src="/icons/flag-CBD5E1.png" alt="">BPJS · VClaim / PCare</a>
+<a class="nav-item" data-nav="antrean" href="/antrean-online"><img class="ic" src="/icons/clock-CBD5E1.png" alt="">Antrean Online & Aplicares</a>
+<a class="nav-item" data-nav="api_publik" href="/api-publik"><img class="ic" src="/icons/command-CBD5E1.png" alt="">API Publik</a>
+<div class="nav-group">SISTEM</div>
+<a class="nav-item" data-nav="pengaturan" href="/pengaturan"><img class="ic" src="/icons/settings-CBD5E1.png" alt="">Pengaturan & Audit</a>
+  </nav>
+  <div class="sidebar-foot">RSUD Waras · Semarang<div class="mode">v1.0 · Mode Klinik · SQLite</div></div>
+</aside>
+<main class="main">
+<header class="topbar">
+  <div style="font-weight:700;font-size:15px">Portal Pasien</div>
+  <div class="spacer"></div>
+  <button class="btn sm" id="portal-logout-top" type="button" style="display:none">Keluar</button>
+</header>
+<div class="content" style="max-width:520px">
+<div class="page-head"><h1>Portal Pasien</h1><div class="sub" id="portal-sub">Masuk dengan NIK dan tanggal lahir.</div></div>
+
+<div id="portal-login" class="card">
+  <form id="portal-login-form">
+    <div class="field"><label for="portal-nik">NIK</label><input id="portal-nik" inputmode="numeric" maxlength="16" placeholder="16 digit NIK" required></div>
+    <div class="field"><label for="portal-dob">Tanggal lahir</label><input id="portal-dob" type="date" required></div>
+    <button class="btn primary block" type="submit">Masuk portal</button>
+    <p class="form-error" id="portal-error"></p>
+    <p class="muted small" style="margin-top:12px">Login memakai NIK + tanggal lahir (kredensial kelas demo). Untuk produksi, portal memakai OTP atau kata sandi &mdash; lihat FASE4.md &sect;7.</p>
+  </form>
+</div>
+
+<div id="portal-main" style="display:none">
+  <p id="portal-staff-label" class="badge blue" style="display:none;margin:0 0 12px">Mode staf &mdash; lihat sebagai</p>
+  <div class="card">
+    <div class="card-head"><img class="ic" src="/icons/circle-user-round-0B7285.png" alt=""><h2 id="portal-name">&mdash;</h2></div>
+    <p class="muted" id="portal-meta" style="margin:0">&mdash;</p>
+  </div>
+  <div class="card">
+    <div class="card-head"><img class="ic" src="/icons/clock-0B7285.png" alt=""><h2>Janji berikutnya</h2></div>
+    <div id="portal-appointments"><p class="empty-note">Memuat janji&hellip;</p></div>
+  </div>
+  <div class="card">
+    <div class="card-head"><img class="ic" src="/icons/users-0B7285.png" alt=""><h2>Antrean saya</h2></div>
+    <div id="portal-queue"><p class="empty-note">Memuat antrean&hellip;</p></div>
+  </div>
+  <div class="card">
+    <div class="card-head"><img class="ic" src="/icons/flask-conical-0B7285.png" alt=""><h2>Hasil lab terbaru</h2></div>
+    <div id="portal-lab"><p class="empty-note">Memuat hasil lab&hellip;</p></div>
+  </div>
+  <div class="card">
+    <div class="card-head"><img class="ic" src="/icons/cross-0B7285.png" alt=""><h2>E-resep aktif</h2></div>
+    <div id="portal-prescriptions"><p class="empty-note">Memuat e-resep&hellip;</p></div>
+  </div>
+  <button class="btn block" id="portal-logout" type="button">Keluar</button>
+</div>
+
+</div>
+</main>
+</div>
+<div id="toast"></div>
+<script src="/js/portal.js"></script>
+</body>
+</html>

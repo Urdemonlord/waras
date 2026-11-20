@@ -9,12 +9,16 @@
 //! encounter terakhir), error sebagai
 //! `{ "error": { "code": "...", "message": "..." } }`.
 
+pub mod api_key_handlers;
 pub mod auth;
 pub mod bridge_handlers;
 pub mod error;
 pub mod fase3_handlers;
+pub mod fase4_handlers;
 pub mod handlers;
 pub mod parse;
+pub mod portal_handlers;
+pub mod public_api;
 pub mod web;
 pub mod worker;
 
@@ -24,7 +28,7 @@ mod tests;
 use std::sync::Arc;
 
 use axum::{
-    routing::{get, post},
+    routing::{get, post, put},
     Router,
 };
 use waras_bridge::{BridgeConfig, BridgeRegistry};
@@ -251,6 +255,118 @@ pub fn router(state: AppState) -> Router {
             "/api/casemix/{id}/export",
             get(fase3_handlers::export_casemix_claim),
         )
+        // -- Ekosistem Fase 4 (FASE4.md §5.1) ------------------------------
+        .route("/api/hemodialisa", get(fase4_handlers::list_hemodialisa))
+        .route(
+            "/api/hemodialisa/sessions",
+            post(fase4_handlers::create_hd_session),
+        )
+        .route(
+            "/api/hemodialisa/sessions/{id}/status",
+            post(fase4_handlers::set_hd_session_status),
+        )
+        .route(
+            "/api/transfusi/stock",
+            get(fase4_handlers::list_blood_stock),
+        )
+        .route(
+            "/api/transfusi/requests",
+            get(fase4_handlers::list_blood_requests).post(fase4_handlers::create_blood_request),
+        )
+        .route(
+            "/api/transfusi/requests/{id}/crossmatch",
+            post(fase4_handlers::add_crossmatch),
+        )
+        .route(
+            "/api/transfusi/requests/{id}/status",
+            post(fase4_handlers::set_blood_request_status),
+        )
+        .route(
+            "/api/gizi/assessments",
+            get(fase4_handlers::list_nutrition_assessments)
+                .post(fase4_handlers::create_nutrition_assessment),
+        )
+        .route(
+            "/api/gizi/diets",
+            get(fase4_handlers::list_nutrition_diets).post(fase4_handlers::create_nutrition_diet),
+        )
+        .route(
+            "/api/gizi/diets/{id}/status",
+            post(fase4_handlers::set_nutrition_diet_status),
+        )
+        .route(
+            "/api/gigi/records",
+            get(fase4_handlers::list_dental_records).post(fase4_handlers::create_dental_record),
+        )
+        .route(
+            "/api/gigi/records/{id}/status",
+            post(fase4_handlers::set_dental_record_status),
+        )
+        .route(
+            "/api/inventori/items",
+            get(fase4_handlers::list_inventory_items).post(fase4_handlers::create_inventory_item),
+        )
+        .route(
+            "/api/inventori/moves",
+            get(fase4_handlers::list_inventory_moves),
+        )
+        .route(
+            "/api/inventori/items/{id}/moves",
+            post(fase4_handlers::add_inventory_move),
+        )
+        .route("/api/kepegawaian/staff", get(fase4_handlers::list_staff).post(fase4_handlers::create_staff))
+        .route(
+            "/api/kepegawaian/staff/{id}/active",
+            post(fase4_handlers::set_staff_active),
+        )
+        .route(
+            "/api/kepegawaian/shifts",
+            get(fase4_handlers::list_shifts).post(fase4_handlers::create_shift),
+        )
+        .route(
+            "/api/laporan/kunjungan",
+            get(fase4_handlers::report_visits),
+        )
+        .route(
+            "/api/laporan/penyakit",
+            get(fase4_handlers::report_top_diseases),
+        )
+        .route("/api/laporan/sirs", get(fase4_handlers::report_sirs))
+        .route("/api/pengaturan", get(fase4_handlers::list_settings))
+        .route(
+            "/api/pengaturan/{key}",
+            put(fase4_handlers::set_setting),
+        )
+        .route(
+            "/api/rawat-jalan",
+            get(fase4_handlers::list_outpatient_visits),
+        )
+        // -- API publik Fase 4 (FASE4.md §5.2, agen D) ---------------------
+        // `public_api.rs` milik agen D; baris merge ini ditambah agen B
+        // sesuai §5.4 walau file-nya belum ada saat build ini — koordinator
+        // menyelaraskan di integrasi.
+        .merge(public_api::public_router())
+        // -- Kunci API + Portal Pasien Fase 4 (FASE4.md §5.2, agen D) -------
+        .route(
+            "/api/api-keys",
+            get(api_key_handlers::list_api_keys).post(api_key_handlers::create_api_key),
+        )
+        .route(
+            "/api/api-keys/{id}/revoke",
+            post(api_key_handlers::revoke_api_key),
+        )
+        .route("/api/auth/patient-login", post(portal_handlers::patient_login))
+        .route("/api/portal/me", get(portal_handlers::portal_me))
+        .route(
+            "/api/portal/appointments",
+            get(portal_handlers::portal_appointments),
+        )
+        .route("/api/portal/queue", get(portal_handlers::portal_queue))
+        .route("/api/portal/lab", get(portal_handlers::portal_lab))
+        .route(
+            "/api/portal/prescriptions",
+            get(portal_handlers::portal_prescriptions),
+        )
         // -- UI statis (waras-web, rust-embed) ----------------------------
         .route("/", get(web::serve_index))
         .route("/index.html", get(web::serve_index))
@@ -270,6 +386,18 @@ pub fn router(state: AppState) -> Router {
         .route("/lab", get(web::serve_lab))
         .route("/radiologi", get(web::serve_radiologi))
         .route("/casemix", get(web::serve_casemix))
+        // -- UI Fase 4 (FASE4.md §5.3) --------------------------------------
+        .route("/hemodialisa", get(web::serve_hemodialisa))
+        .route("/transfusi", get(web::serve_transfusi))
+        .route("/gizi", get(web::serve_gizi))
+        .route("/gigi", get(web::serve_gigi))
+        .route("/portal", get(web::serve_portal))
+        .route("/api-publik", get(web::serve_api_publik))
+        .route("/inventori", get(web::serve_inventori))
+        .route("/kepegawaian", get(web::serve_kepegawaian))
+        .route("/laporan", get(web::serve_laporan))
+        .route("/pengaturan", get(web::serve_pengaturan))
+        .route("/rawat-jalan", get(web::serve_rawat_jalan))
         .route("/assets/{*path}", get(web::serve_assets))
         .route("/css/{*path}", get(web::serve_css))
         .route("/js/{*path}", get(web::serve_js))
