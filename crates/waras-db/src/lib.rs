@@ -800,9 +800,9 @@ mod tests {
     use waras_core::types::DashboardKpis;
 
     async fn seeded_db() -> Db {
-        let db = Db::connect("sqlite::memory:")
+        let db = Db::connect_for_tests()
             .await
-            .expect("buka in-memory");
+            .expect("buka DB test");
         db.migrate().await.expect("migrasi");
         assert!(db.seed_if_empty().await.expect("seed"));
         db
@@ -871,6 +871,8 @@ mod tests {
 
     #[tokio::test]
     async fn db_mode_is_sqlite_by_default() {
+        // Sengaja SQLite langsung (bukan connect_for_tests): test ini
+        // membuktikan default-nya sqlite walau env PG diisi.
         let db = Db::connect("sqlite::memory:").await.expect("buka in-memory");
         assert_eq!(db.mode(), "sqlite");
     }

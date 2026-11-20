@@ -195,7 +195,7 @@ mod tests {
     use crate::clinic_today;
 
     async fn seeded_db() -> Db {
-        let db = Db::connect("sqlite::memory:").await.expect("buka in-memory");
+        let db = Db::connect_for_tests().await.expect("buka DB test");
         db.migrate().await.expect("migrasi");
         assert!(db.seed_if_empty().await.expect("seed"));
         db

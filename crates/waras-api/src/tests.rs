@@ -54,7 +54,7 @@ async fn seeded_app() -> Router {
 /// (stub SATUSEHAT/BPJS). Mengembalikan juga `Db` supaya test bisa
 /// menjalankan `worker::run_once` langsung.
 async fn seeded_app_with_config(config: BridgeConfig) -> (Router, Arc<Db>) {
-    let db = Db::connect("sqlite::memory:").await.expect("buka in-memory");
+    let db = Db::connect_for_tests().await.expect("buka DB test");
     db.migrate().await.expect("migrasi");
     assert!(db.seed_if_empty().await.expect("seed"), "seed harus jalan");
     let db = Arc::new(db);
