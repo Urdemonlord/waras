@@ -105,7 +105,7 @@ impl Db {
         // -- tagihan belum lunas hari ini --------------------------------------
         let (unpaid_idr, unpaid_count): (i64, i64) = {
             let row: (Option<i64>, i64) = sqlx::query_as(
-                "SELECT COALESCE(SUM(amount), 0), COUNT(*) FROM invoices
+                "SELECT CAST(COALESCE(SUM(amount), 0) AS BIGINT), COUNT(*) FROM invoices
                  WHERE status IN ('menunggu', 'cicilan')
                    AND substr(created_at, 1, 10) = ?",
             )

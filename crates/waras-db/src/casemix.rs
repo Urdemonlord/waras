@@ -177,7 +177,7 @@ impl Db {
         let row: (i64, i64, Option<i64>, i64) = sqlx::query_as(
             "SELECT COUNT(*),
                COALESCE(SUM(CASE WHEN status = 'terverifikasi' THEN 1 ELSE 0 END), 0),
-               COALESCE(SUM(CASE WHEN status = 'dibayar' THEN amount ELSE 0 END), 0),
+               CAST(COALESCE(SUM(CASE WHEN status = 'dibayar' THEN amount ELSE 0 END), 0) AS BIGINT),
                COALESCE(SUM(CASE WHEN status IN ('pending', 'ditolak') THEN 1 ELSE 0 END), 0)
              FROM claims",
         )
