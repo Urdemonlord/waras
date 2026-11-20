@@ -6,15 +6,17 @@ yang modern dan ringan: **modular monolith, satu binary, full Rust**,
 model data mengikuti resource **HL7 FHIR R4** sejak skema pertama.
 
 Repo ini adalah implementasi **Fase 1 — Inti Klinis, Fase 2 —
-Jembatan Nasional, dan Fase 3 — Rumah Sakit** dari paper desain
+Jembatan Nasional, Fase 3 — Rumah Sakit, dan Fase 4 — Ekosistem**
+dari paper desain
 (`~/workspace/your_files/waras-paper-simrs-modern/waras-paper-simrs-modern.pdf`,
 v4) dan desain UI FigCraft v16 (`~/workspace/waras/figcraft/`, file
-`waras-full-v16-lucide.figcraft`). Fase 3 ada di branch
-`fase-3-rumah-sakit` (belum merge/deploy); lihat `docs/FASE3.md`.
+`waras-full-v16-lucide.figcraft`). Semua fase sudah merge ke `main`
+(Fase 4: commit `c23844c`); lihat `docs/FASE2.md`, `docs/FASE3.md`,
+`docs/FASE4.md`. **Versi: v0.1.0** (lihat `CHANGELOG.md`).
 
 ## Demo live
 
-https://waras.meowlabs.id — deploy 19 November 2026, commit `6ee6835`,
+https://waras.meowlabs.id — deploy 20 November 2026, `main` @ `c23844c`,
 `waras.service` di VPS Meow Labs (port internal 3200, nginx +
 Let's Encrypt, DNS A record via Cloudflare). Login memakai akun seed
 di bawah.
@@ -388,4 +390,4 @@ Fase 4 menuntaskan semua modul yang masih `segera` di sidebar
 
 ## Lisensi
 
-Apache-2.0.
+Apache-2.0 — lihat file `LICENSE`.
