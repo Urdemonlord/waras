@@ -49,11 +49,16 @@ mod rawat_jalan;
 mod rows;
 mod seed;
 mod seps;
+mod security;
 mod transfusi;
 mod users;
 
 pub use lab::NewLabResult;
 pub use seed::seed;
+pub use security::{
+    ApiRateLimit, API_RATE_LIMIT_PER_MINUTE, API_RATE_WINDOW_SECS, LOGIN_LOCKOUT_SECS,
+    LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_SECS,
+};
 pub use waras_core::types::NewPrescription;
 
 use std::collections::HashMap;

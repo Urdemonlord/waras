@@ -72,6 +72,10 @@ pub async fn seed(db: &Db) -> Result<(), waras_core::WarasError> {
     }
 
     // -- 5.2 Pasien (12 orang: 10 Fase 1 + 2 Fase 3) -------------------------
+    // Kata sandi portal demo semua pasien seed: `waras123` (sama seperti
+    // staf; hash Argon2, satu hash dipakai semua pasien seed — kata
+    // sandi demo, bukan rahasia per pasien; lihat README + FASE-A-A4.md).
+    let portal_hash = Db::hash_password("waras123")?;
     // (rm, nik, nama, lahir, gender, alamat, gol_darah, bpjs, penjamin)
     let patients: [(&str, &str, &str, NaiveDate, Gender, &str, &str, Option<&str>, Insurance); 12] = [
         ("RM-000812", "3374021205850001", "Siti Rahmawati", d(1985, 5, 12), Gender::Perempuan,
@@ -103,8 +107,8 @@ pub async fn seed(db: &Db) -> Result<(), waras_core::WarasError> {
     for (rm, nik, name, birth, gender, address, blood, bpjs, insurance) in patients {
         sqlx::query(
             "INSERT INTO patients (id, nik, name, birth_date, gender, address, phone,
-                 blood_type, bpjs_number, insurance, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)",
+                 blood_type, bpjs_number, insurance, created_at, portal_password_hash)
+             VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
         )
         .bind(rm)
         .bind(nik)
@@ -116,6 +120,7 @@ pub async fn seed(db: &Db) -> Result<(), waras_core::WarasError> {
         .bind(bpjs)
         .bind(insurance_to_str(insurance))
         .bind(t(7, 0))
+        .bind(&portal_hash)
         .execute(&db.pool)
         .await
         .map_err(db_err)?;
@@ -1461,6 +1466,8 @@ pub async fn seed_fase4(db: &Db) -> Result<bool, waras_core::WarasError> {
     let t = |hh: u32, mm: u32| fmt_dt(dt(today, hh, mm));
 
     // -- Pasien baru (RM-000824/825) + kondisi kronik Slamet -------------
+    // Kata sandi portal demo: `waras123`, sama seperti pasien seed lain.
+    let portal_hash = Db::hash_password("waras123")?;
     let new_patients: [(&str, &str, &str, NaiveDate, Gender, &str, &str, Option<&str>, Insurance); 2] = [
         ("RM-000824", "3374031005720013", "Slamet Riyadi", d(1972, 5, 10), Gender::LakiLaki,
          "Jl. Tlogosari No. 18, Semarang", "O+", Some("0001234567898"), Insurance::Bpjs),
@@ -1470,8 +1477,8 @@ pub async fn seed_fase4(db: &Db) -> Result<bool, waras_core::WarasError> {
     for (rm, nik, name, birth, gender, address, blood, bpjs, insurance) in new_patients {
         sqlx::query(
             "INSERT INTO patients (id, nik, name, birth_date, gender, address, phone,
-                 blood_type, bpjs_number, insurance, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)",
+                 blood_type, bpjs_number, insurance, created_at, portal_password_hash)
+             VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
         )
         .bind(rm)
         .bind(nik)
@@ -1483,6 +1490,7 @@ pub async fn seed_fase4(db: &Db) -> Result<bool, waras_core::WarasError> {
         .bind(bpjs)
         .bind(insurance_to_str(insurance))
         .bind(t(7, 0))
+        .bind(&portal_hash)
         .execute(&db.pool)
         .await
         .map_err(db_err)?;
