@@ -738,6 +738,17 @@ pub(crate) fn db_err(e: sqlx::Error) -> WarasError {
     WarasError::Database(e.to_string())
 }
 
+/// Apakah pesan error DB ini pelanggaran unique/PK (A2)? Dipakai retry
+/// alokasi id baca-max-lalu-insert: di Postgres dua penulis bersamaan
+/// bisa menghitung id yang sama dan yang kedua gagal `duplicate key
+/// value violates unique constraint`; di SQLite pesannya `UNIQUE
+/// constraint failed`. Hanya pola itu yang di-retry (maks 5x) — error
+/// lain diteruskan apa adanya.
+pub(crate) fn is_unique_violation_msg(msg: &str) -> bool {
+    msg.contains("duplicate key value violates unique constraint")
+        || msg.contains("UNIQUE constraint failed")
+}
+
 pub(crate) fn fmt_dt(dt: NaiveDateTime) -> String {
     dt.format("%Y-%m-%d %H:%M:%S").to_string()
 }

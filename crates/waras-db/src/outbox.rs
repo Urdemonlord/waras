@@ -116,9 +116,29 @@ impl OutboxRow {
 impl Db {
     /// Enqueue idempotent: `INSERT OR IGNORE` atas `idempotency_key`.
     /// Kembalikan `true` bila baris baru dibuat, `false` bila kunci sudah
-    /// ada. Bila `job.id` kosong, isi `OBX-######` berikutnya (pola yang
-    /// sama seperti `RX-####` di `prescriptions.rs`).
+    /// ada. Retry alokasi id OBX-###### (maks 5x) bila dua penulis
+    /// bersamaan menghitung id yang sama (A2, sama seperti `take_queue`;
+    /// pelanggaran PK atas id, bukan atas idempotency_key — yang terakhir
+    /// ditangani `ON CONFLICT DO NOTHING` / `INSERT OR IGNORE` dan
+    /// mengembalikan `false`, bukan error).
     pub async fn enqueue_outbox(&self, job: &OutboxJob) -> Result<bool, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self.enqueue_outbox_once(job).await {
+                Ok(b) => return Ok(b),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id outbox".into())))
+    }
+
+    async fn enqueue_outbox_once(&self, job: &OutboxJob) -> Result<bool, WarasError> {
         let id = if job.id.trim().is_empty() {
             let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM outbox")
                 .fetch_all(&self.pool)

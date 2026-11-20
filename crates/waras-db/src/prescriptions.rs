@@ -30,8 +30,35 @@ impl Db {
 
     /// Seperti `prescribe`, tapi status awal bisa diminta
     /// (mis. MenungguKonfirmasi untuk resep pengganti). Default pemanggil
-    /// biasa tetap Aktif lewat `prescribe`.
+    /// biasa tetap Aktif lewat `prescribe`. Retry alokasi id RX-#### (maks
+    /// 5x) bila dua penulis bersamaan menghitung id yang sama (A2, sama
+    /// seperti `take_queue`).
     pub async fn prescribe_as(
+        &self,
+        actor: &str,
+        input: NewPrescription,
+        requested: PrescriptionStatus,
+    ) -> Result<MedicationRequest, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .prescribe_as_once(actor, input.clone(), requested)
+                .await
+            {
+                Ok(rx) => return Ok(rx),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id resep".into())))
+    }
+
+    async fn prescribe_as_once(
         &self,
         actor: &str,
         input: NewPrescription,

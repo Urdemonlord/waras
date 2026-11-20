@@ -39,7 +39,37 @@ impl Db {
     }
 
     /// Ambil nomor antrean baru: nomor berikutnya per prefix poli + tanggal.
+    /// Retry alokasi id (maks 5x) bila dua penulis bersamaan menghitung
+    /// nomor yang sama dan insert kedua kena pelanggaran PK (A2: di PG
+    /// 20 penulis bersamaan 59% gagal sebelum retry ini; di SQLite satu
+    /// writer jarang kena, tapi retry-nya tidak merugikan).
     pub async fn take_queue(
+        &self,
+        patient_id: &str,
+        poli: &str,
+        doctor: &str,
+        date: NaiveDate,
+    ) -> Result<QueueEntry, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .take_queue_once(patient_id, poli, doctor, date)
+                .await
+            {
+                Ok(e) => return Ok(e),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi nomor antrean".into())))
+    }
+
+    async fn take_queue_once(
         &self,
         patient_id: &str,
         poli: &str,
