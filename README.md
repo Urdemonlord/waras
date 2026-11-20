@@ -61,6 +61,12 @@ Satu-satunya berkas yang ditulis server adalah `waras.db`
 Ganti kata sandi ini sebelum dipakai di luar demo. Login memakai NIP
 atau username.
 
+Login portal pasien (`/portal`): NIK pasien seed + kata sandi portal
+`waras123` (sama untuk semua pasien seed, hash Argon2). NIK + tanggal
+lahir saja tidak bisa masuk. Pasien baru dari registrasi belum punya
+kata sandi portal (lihat `docs/FASE-A-A4.md` — belum ada endpoint
+set/ganti kata sandi portal).
+
 ## Yang sudah dibangun (Fase 1)
 
 - **Satu Cargo workspace, satu binary** (`waras`): Tokio + Axum + SQLx +
@@ -321,16 +327,17 @@ Fase 4 menuntaskan semua modul yang masih `segera` di sidebar
   Gemuk/Obesitas) + diet & menu.
 - **Rekam Medis Gigi**: odontogram grid FDI 11–48 + perawatan gigi.
 - **Portal Pasien** (`/portal`, mobile 390px): pasien login dengan
-  **NIK + tanggal lahir** dan hanya melihat data sendiri (e-resep,
-  janji, hasil lab, antrean; NIK dimaskir `337402******0001`).
-  **PERINGATAN: login pasien NIK+tanggal lahir adalah kredensial
-  demo — untuk produksi wajib diganti OTP/kata sandi** (lihat
-  `docs/FASE4.md` §8). Peran baru `pasien`: hanya `ViewPortal`.
+  **NIK + kata sandi portal** (`waras123` untuk semua pasien seed,
+  hash Argon2 — lihat `docs/FASE-A-A4.md`) dan hanya melihat data
+  sendiri (e-resep, janji, hasil lab, antrean; NIK dimaskir
+  `337402******0001`). Login dibatasi brute-force (5 gagal/15 menit
+  -> 429). NIK + tanggal lahir saja tidak bisa masuk.
+  Peran baru `pasien`: hanya `ViewPortal`.
 - **API Publik** (`/public/v1/*`, `/api-publik`): kunci API dibuat
   Admin (`wrs_` + 32 heksadesimal acak, disimpan sebagai hash
   SHA-256, kunci penuh HANYA ditampilkan sekali saat dibuat, tidak
   pernah di-seed), cakupan `patients:read`, `queue:read`,
-  `encounters:read`, `fhir:read`, rate limit 100/menit per kunci,
+  `encounters:read`, `fhir:read`, rate limit 100/menit per kunci (persisten di DB, bertahan setelah restart),
   NIK dimaskir di semua respons. Hanya baca — tidak ada tulis.
 - **Inventori**: stok obat/alkes (status Kritis ≤12 / Segera ≤30 /
   Aman — logika sama dengan Farmasi), kartu masuk/keluar.

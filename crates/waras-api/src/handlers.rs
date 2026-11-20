@@ -10,7 +10,8 @@ use std::collections::HashMap;
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     Json,
 };
 use chrono::NaiveDate;
@@ -26,7 +27,7 @@ use waras_core::{
 use waras_db::{clinic_today, Db, NewPatient, PrescriptionFilter};
 
 use crate::{
-    auth::{require, AuthUser, JsonBody},
+    auth::{require, AuthUser, ClientIp, JsonBody},
     error::ApiError,
     parse::*,
     worker::{new_outbox_job, try_enqueue},
@@ -82,23 +83,46 @@ pub async fn health(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
+/// `POST /api/auth/login` (publik) + brute-force: 5 gagal dalam
+/// 15 menit untuk pasangan IP + username/NIP yang sama -> 429 +
+/// `Retry-After` 15 menit; satu login sukses menghapus hitungan.
+/// Pesan 401 tetap generik (jangan bocorkan mana yang salah).
 pub async fn login(
     State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
     JsonBody(body): JsonBody<LoginRequest>,
-) -> ApiResult<(StatusCode, Json<Value>)> {
+) -> ApiResult<Response> {
     if body.username.trim().is_empty() || body.password.is_empty() {
         return Err(ApiError::validation(
             "nama pengguna/NIP dan kata sandi wajib diisi",
         ));
     }
+    let login_key = body.username.trim().to_string();
+    let attempt_key = format!("staff:{ip}:{login_key}");
+    if let Some(retry) = state.db.check_login_lockout(&attempt_key).await? {
+        return Ok(ApiError::rate_limited_response(
+            retry as u64,
+            "terlalu banyak percobaan login, coba lagi nanti",
+        ));
+    }
     let user = state
         .db
-        .find_user_by_username_or_nip(body.username.trim())
+        .find_user_by_username_or_nip(&login_key)
         .await?;
     let user = match user {
         Some(u) if Db::verify_password(&u.password_hash, &body.password) && u.active => u,
-        _ => return Err(ApiError::unauthorized()),
+        _ => {
+            if let Some(retry) = state.db.record_login_failure(&attempt_key).await? {
+                return Ok(ApiError::rate_limited_response(
+                    retry as u64,
+                    "terlalu banyak percobaan login, coba lagi nanti",
+                ));
+            }
+            return Err(ApiError::unauthorized());
+        }
     };
+    // Satu login benar membersihkan hitungan kegagalan.
+    let _ = state.db.clear_login_attempts(&attempt_key).await;
     let token = state.db.create_session(&user.id).await?;
     audit(
         &state.db,
@@ -110,7 +134,26 @@ pub async fn login(
     )
     .await;
     // `User` tidak menyerialisasi `password_hash` (skip_serializing).
-    Ok((StatusCode::OK, Json(json!({ "token": token, "user": user }))))
+    Ok((StatusCode::OK, Json(json!({ "token": token, "user": user }))).into_response())
+}
+
+/// `POST /api/auth/logout` — hapus sesi pemilik token Bearer (staf
+/// maupun portal; `delete_session` menghapus berdasarkan token apa
+/// pun). Selalu 200, juga tanpa token / token tidak dikenal (jangan
+/// bocorkan apakah token itu ada). Dipakai tombol Keluar portal;
+/// sebelumnya logout hanya menghapus token di localStorage dan sesi
+/// server tetap berlaku sampai kedaluwarsa 12 jam.
+pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Json<Value> {
+    if let Some(token) = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        let _ = state.db.delete_session(token).await;
+    }
+    Json(json!({ "status": "ok" }))
 }
 
 pub async fn me(AuthUser(user): AuthUser) -> Json<Value> {

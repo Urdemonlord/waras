@@ -65,7 +65,7 @@
     document.getElementById('portal-login').style.display = 'block';
     document.getElementById('portal-main').style.display = 'none';
     document.getElementById('portal-logout-top').style.display = 'none';
-    document.getElementById('portal-sub').textContent = 'Masuk dengan NIK dan tanggal lahir.';
+    document.getElementById('portal-sub').textContent = 'Masuk dengan NIK dan kata sandi portal.';
   }
   function showMain() {
     document.getElementById('portal-login').style.display = 'none';
@@ -73,6 +73,16 @@
     document.getElementById('portal-logout-top').style.display = '';
   }
   function logout() {
+    // Hapus sesi di server juga (POST /api/auth/logout) — sebelumnya
+    // logout hanya menghapus token di localStorage dan sesi server
+    // tetap berlaku sampai kedaluwarsa 12 jam (Fase A/A4).
+    var token = get(PORTAL_KEY);
+    if (token) {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token }
+      }).catch(function () { /* best-effort */ });
+    }
     set(PORTAL_KEY, null);
     showLogin();
   }
@@ -211,12 +221,15 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             nik: document.getElementById('portal-nik').value.trim(),
-            birth_date: document.getElementById('portal-dob').value
+            password: document.getElementById('portal-password').value
           })
         });
         var data = null;
         try { data = await res.json(); } catch (e) { /* tanpa body */ }
-        if (!res.ok) throw new Error('NIK atau tanggal lahir tidak cocok.');
+        if (!res.ok) {
+          if (res.status === 429) throw new Error('Terlalu banyak percobaan login, coba lagi nanti.');
+          throw new Error('NIK atau kata sandi tidak cocok.');
+        }
         set(PORTAL_KEY, data.token);
         await loadPatientMode(data.token);
       } catch (e) {

@@ -28,9 +28,11 @@ mod tests;
 use std::sync::Arc;
 
 use axum::{
+    http::{header, HeaderValue},
     routing::{get, post, put},
     Router,
 };
+use tower_http::set_header::SetResponseHeaderLayer;
 use waras_bridge::{BridgeConfig, BridgeRegistry};
 use waras_db::Db;
 
@@ -53,6 +55,7 @@ pub fn router(state: AppState) -> Router {
         // -- Publik -------------------------------------------------------
         .route("/api/health", get(health))
         .route("/api/auth/login", post(login))
+        .route("/api/auth/logout", post(logout))
         // -- Auth ---------------------------------------------------------
         .route("/api/auth/me", get(me))
         // -- Pasien -------------------------------------------------------
@@ -405,5 +408,25 @@ pub fn router(state: AppState) -> Router {
         .route("/waras-tile-sharp.png", get(web::serve_tile))
         // -- Fallback: API tidak dikenal -> JSON 404; selain itu -> `/`.
         .fallback(web::fallback)
+        // -- Header keamanan (Fase A/A4, `tower-http` SetHeader):
+        // `X-Content-Type-Options: nosniff` (cegah sniffing MIME),
+        // `X-Frame-Options: DENY` (cegah clickjacking — UI tidak pernah
+        // di-iframe), `Referrer-Policy: strict-origin-when-cross-origin`
+        // (jangan bocorkan path lengkap ke situs lain). Diterapkan ke
+        // SEMUA respons (API + aset statis + fallback). Sebelum A4,
+        // server tidak mengirim satu pun header ini (dicek lewat curl
+        // saat verifikasi — lihat docs/FASE-A-A4.md).
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ))
         .with_state(state)
 }

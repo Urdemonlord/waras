@@ -17,6 +17,18 @@ use axum::{
 use crate::error::ApiError;
 
 fn serve_asset(path: &str) -> Response {
+    // Path traversal: `waras_web::get` HANYA lookup kunci persis di
+    // peta aset rust-embed (tidak ada akses filesystem), jadi
+    // `../`/`..%2F` tidak akan pernah menemukan file — tapi tolak
+    // eksplisit di sini supaya traversal tidak pernah lolos walau
+    // routing berubah. Dicek juga lewat curl saat verifikasi A4.
+    if path
+        .split('/')
+        .any(|seg| seg == ".." || seg == "." || seg.contains('\\'))
+        || path.to_lowercase().contains("%2e")
+    {
+        return ApiError::not_found(format!("aset {path} tidak ditemukan")).into_response();
+    }
     match waras_web::get(path) {
         Some(file) => Response::builder()
             .status(200)

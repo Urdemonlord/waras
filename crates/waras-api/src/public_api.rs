@@ -5,8 +5,10 @@
 //! ditunjukkan) == `key_hash` tersimpan, `revoked = 0`, scope cocok.
 //! Gagal -> 401 (kunci salah / dicabut / tidak ada) atau 403 (scope
 //! tidak cukup). `last_used_at` diperbarui tiap panggilan sukses
-//! (best-effort). Rate limit di memori per kunci: 100 request/menit,
-//! lewat -> 429 (hilang saat restart — cukup untuk demo, FASE4.md §8.5).
+//! (best-effort). Rate limit PERSISTEN di DB (`api_rate_limits`,
+//! Fase A/A4): 100 request/menit per kunci, lewat -> 429 +
+//! `Retry-After`; hitungan bertahan setelah server restart
+//! (pengganti HashMap in-memory Fase 4, yang hilang saat restart).
 //!
 //! NIK tidak pernah dikembalikan lengkap di respons publik — selalu
 //! disensor tengah (`portal_handlers::mask_nik`). Endpoint FHIR memakai
@@ -14,22 +16,18 @@
 //! diganti dengan versi tersensor (helper itu sendiri menulis NIK
 //! lengkap, jadi tanpa langkah ini endpoint akan membocorkan NIK).
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
-};
+use std::collections::HashMap;
 
 use axum::{
-    extract::{Extension, Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    extract::{Path, Query, State},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Json, Router,
 };
 use serde_json::{json, Value};
 use waras_core::fhir;
-use waras_db::clinic_today;
+use waras_db::{clinic_today, API_RATE_LIMIT_PER_MINUTE};
 
 use crate::{
     api_key_handlers::sha256_hex_str,
@@ -38,43 +36,10 @@ use crate::{
     AppState,
 };
 
-/// Batas rate limit: 100 request per 60 detik per kunci.
-pub const RATE_LIMIT_PER_MINUTE: u32 = 100;
-const RATE_WINDOW: Duration = Duration::from_secs(60);
-
-/// State rate limit di memori: kunci API -> (awal jendela, hitungan).
-/// Struktur persis seperti kontrak (`Mutex<HashMap<String,
-/// (Instant, u32)>>`); dibungkus `Arc` supaya bisa dibagi lewat
-/// `Extension` ke semua handler router publik.
-pub type RateLimiter = Arc<Mutex<HashMap<String, (Instant, u32)>>>;
-
-/// Cek + hitung satu request untuk `key` pada `now`. `true` = masih
-/// dalam batas (hitungan ditambah), `false` = lewat batas (429).
-/// Jendela 60 detik dihitung dari request pertama di jendela itu.
-pub fn rate_limit_allowed(
-    map: &mut HashMap<String, (Instant, u32)>,
-    key: &str,
-    now: Instant,
-) -> bool {
-    match map.get_mut(key) {
-        Some((start, count)) => {
-            if now.duration_since(*start) >= RATE_WINDOW {
-                *start = now;
-                *count = 1;
-                true
-            } else if *count < RATE_LIMIT_PER_MINUTE {
-                *count += 1;
-                true
-            } else {
-                false
-            }
-        }
-        None => {
-            map.insert(key.to_string(), (now, 1));
-            true
-        }
-    }
-}
+/// Batas rate limit: 100 request per 60 detik per kunci
+/// (ditegakkan DB di `Db::check_api_rate_limit`; konstanta ini
+/// satu-satunya sumber nilai — diimpor dari `waras-db`).
+pub const RATE_LIMIT_PER_MINUTE: i64 = API_RATE_LIMIT_PER_MINUTE;
 
 fn err_response(status: StatusCode, code: &str, message: &str) -> Response {
     (
@@ -84,17 +49,30 @@ fn err_response(status: StatusCode, code: &str, message: &str) -> Response {
         .into_response()
 }
 
+fn err_response_with_retry(
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    retry_after_secs: u64,
+) -> Response {
+    (
+        status,
+        [(header::RETRY_AFTER, retry_after_secs.max(1).to_string())],
+        Json(json!({ "error": { "code": code, "message": message } })),
+    )
+        .into_response()
+}
+
 fn api_err_response(e: ApiError) -> Response {
     e.into_response()
 }
 
-/// Verifikasi `X-Api-Key` + scope, lalu rate limit. Mengembalikan
+/// Verifikasi `X-Api-Key` + scope, lalu rate limit (DB). Mengembalikan
 /// record kunci bila lolos; bila tidak, respons error siap kirim
 /// (401 / 403 / 429). Urutan: kunci -> dicabut -> scope -> rate limit
 /// (rate limit dihitung hanya untuk kunci valid + scope cukup).
 async fn authenticate(
     state: &AppState,
-    limiter: &RateLimiter,
     headers: &HeaderMap,
     scope: &str,
 ) -> Result<waras_core::types::ApiKey, Response> {
@@ -138,15 +116,17 @@ async fn authenticate(
             &format!("scope {scope} tidak dimiliki kunci ini"),
         ));
     }
-    let allowed = {
-        let mut map = limiter.lock().unwrap_or_else(|e| e.into_inner());
-        rate_limit_allowed(&mut map, &key.id, Instant::now())
-    };
-    if !allowed {
-        return Err(err_response(
+    let limit = state
+        .db
+        .check_api_rate_limit(&key.id)
+        .await
+        .map_err(db_err)?;
+    if !limit.allowed {
+        return Err(err_response_with_retry(
             StatusCode::TOO_MANY_REQUESTS,
             "RATE_LIMITED",
             "batas 100 request per menit terlampaui",
+            limit.retry_after_secs,
         ));
     }
     // Best-effort: jangan gagalkan request bila update gagal.
@@ -164,11 +144,10 @@ fn db_err(e: impl Into<ApiError>) -> Response {
 
 pub async fn list_public_patients(
     State(state): State<AppState>,
-    Extension(limiter): Extension<RateLimiter>,
     headers: HeaderMap,
     Query(q): Query<HashMap<String, String>>,
 ) -> PubResult {
-    authenticate(&state, &limiter, &headers, "patients:read").await?;
+    authenticate(&state, &headers, "patients:read").await?;
     let patients = state
         .db
         .list_patients(q.get("search").map(String::as_str))
@@ -183,11 +162,10 @@ pub async fn list_public_patients(
 
 pub async fn get_public_patient(
     State(state): State<AppState>,
-    Extension(limiter): Extension<RateLimiter>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> PubResult {
-    authenticate(&state, &limiter, &headers, "patients:read").await?;
+    authenticate(&state, &headers, "patients:read").await?;
     let patient = state
         .db
         .get_patient(&id)
@@ -207,11 +185,10 @@ pub async fn get_public_patient(
 
 pub async fn list_public_queue(
     State(state): State<AppState>,
-    Extension(limiter): Extension<RateLimiter>,
     headers: HeaderMap,
     Query(q): Query<HashMap<String, String>>,
 ) -> PubResult {
-    authenticate(&state, &limiter, &headers, "queue:read").await?;
+    authenticate(&state, &headers, "queue:read").await?;
     let date = match q.get("date") {
         Some(s) if !s.trim().is_empty() => chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
             .map_err(|_| {
@@ -227,11 +204,10 @@ pub async fn list_public_queue(
 
 pub async fn list_public_encounters(
     State(state): State<AppState>,
-    Extension(limiter): Extension<RateLimiter>,
     headers: HeaderMap,
     Query(q): Query<HashMap<String, String>>,
 ) -> PubResult {
-    authenticate(&state, &limiter, &headers, "encounters:read").await?;
+    authenticate(&state, &headers, "encounters:read").await?;
     let patient_id = q
         .get("patient_id")
         .map(|s| s.trim().to_string())
@@ -249,11 +225,10 @@ pub async fn list_public_encounters(
 
 pub async fn get_public_fhir_patient(
     State(state): State<AppState>,
-    Extension(limiter): Extension<RateLimiter>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> PubResult {
-    authenticate(&state, &limiter, &headers, "fhir:read").await?;
+    authenticate(&state, &headers, "fhir:read").await?;
     let patient = state
         .db
         .get_patient(&id)
@@ -279,11 +254,10 @@ pub async fn get_public_fhir_patient(
 
 /// Router publik (nama + signature persis seperti kontrak; agen B
 /// me-merge-nya di `lib.rs`: `.merge(public_api::public_router())`).
-/// Rate limiter dibuat sekali di sini dan dibagi ke semua handler
-/// lewat `Extension`; router dibangun sekali saat startup, jadi satu
-/// instance limiter dipakai semua request.
+/// Rate limit TIDAK lagi di sini: ditegakkan DB (`api_rate_limits`)
+/// di `authenticate`, jadi tidak ada state in-memory yang hilang
+/// saat restart.
 pub fn public_router() -> Router<AppState> {
-    let limiter: RateLimiter = Arc::new(Mutex::new(HashMap::new()));
     Router::new()
         .route("/public/v1/patients", get(list_public_patients))
         .route("/public/v1/patients/{id}", get(get_public_patient))
@@ -293,14 +267,12 @@ pub fn public_router() -> Router<AppState> {
             "/public/v1/fhir/Patient/{id}",
             get(get_public_fhir_patient),
         )
-        .layer(Extension(limiter))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use std::time::Duration as StdDuration;
 
     use axum::{body::Body, http::Request};
     use serde_json::Value;
@@ -309,29 +281,23 @@ mod tests {
     use waras_db::Db;
 
     use crate::api_key_handlers::{generate_api_key, key_prefix};
-    #[test]
-    fn rate_limit_100_lolos_101_ditolak_lalu_reset_setelah_60_detik() {
-        let mut map: HashMap<String, (Instant, u32)> = HashMap::new();
-        let now = Instant::now();
+    /// Rate limit DB: 100 lolos, ke-101 ditolak, kunci lain tidak kena.
+    /// Reset jendela (60 dtk) dibuktikan di tes unit `waras-db`
+    /// (`security.rs`, majukan `window_start` lewat SQL — di crate ini
+    /// pool tidak bisa diakses langsung).
+    #[tokio::test]
+    async fn rate_limit_db_100_lolos_101_ditolak_dan_per_kunci() {
+        let db = Db::connect("sqlite::memory:").await.expect("buka in-memory");
+        db.migrate().await.expect("migrasi");
         for i in 1..=100 {
-            assert!(
-                rate_limit_allowed(&mut map, "AK-000001", now),
-                "request ke-{i} harus lolos"
-            );
+            let r = db.check_api_rate_limit("AK-000001").await.expect("cek");
+            assert!(r.allowed, "request ke-{i} harus lolos");
         }
-        assert!(
-            !rate_limit_allowed(&mut map, "AK-000001", now),
-            "request ke-101 harus 429"
-        );
+        let r = db.check_api_rate_limit("AK-000001").await.expect("cek");
+        assert!(!r.allowed, "request ke-101 harus ditolak");
+        assert!((1..=60).contains(&r.retry_after_secs), "retry {}", r.retry_after_secs);
         // Kunci lain tidak kena batas kunci ini.
-        assert!(rate_limit_allowed(&mut map, "AK-000002", now));
-        // Setelah 60 detik jendela baru: hitungan mulai lagi dari 1.
-        let later = now + StdDuration::from_secs(61);
-        assert!(rate_limit_allowed(&mut map, "AK-000001", later));
-        for _ in 0..99 {
-            assert!(rate_limit_allowed(&mut map, "AK-000001", later));
-        }
-        assert!(!rate_limit_allowed(&mut map, "AK-000001", later));
+        assert!(db.check_api_rate_limit("AK-000002").await.expect("cek").allowed);
     }
 
     fn disabled_config() -> BridgeConfig {
@@ -364,12 +330,21 @@ mod tests {
     }
 
     /// Router publik + satu kunci `patients:read,queue:read` dan satu
-    /// kunci `patients:read` saja. Mengembalikan (app, db, kunci penuh,
+    /// kunci `patients:read` saja, di atas DB `path` (in-memory atau
+    /// file — file dipakai tes restart). Bila `path` adalah in-memory,
+    /// pakai `connect_for_tests()` supaya suite Postgres ikut menguji
+    /// endpoint ini di PG nyata. Mengembalikan (app, db, kunci penuh,
     /// kunci sempit, id kunci penuh).
-    async fn public_app() -> (Router, Arc<Db>, String, String, String) {
-        let db = Db::connect_for_tests().await.expect("buka DB test");
+    async fn public_app_on(path: &str) -> (Router, Arc<Db>, String, String, String) {
+        let db = if path == "sqlite::memory:" {
+            Db::connect_for_tests().await.expect("buka DB test")
+        } else {
+            Db::connect(path).await.expect("buka DB")
+        };
         db.migrate().await.expect("migrasi");
-        assert!(db.seed_if_empty().await.expect("seed"), "seed harus jalan");
+        // Seed hanya jalan di DB kosong; boot 2 (tes restart, DB file
+        // sudah berisi) sengaja TIDAK menjalankan seed lagi.
+        db.seed_if_empty().await.expect("seed");
         let key = generate_api_key();
         let record = db
             .create_api_key(
@@ -426,7 +401,7 @@ mod tests {
     /// Auth + scope + sensor NIK + FHIR tersensor, end-to-end.
     #[tokio::test]
     async fn public_auth_scope_dan_nik_tersensor() {
-        let (app, _db, key, narrow, _id) = public_app().await;
+        let (app, _db, key, narrow, _id) = public_app_on("sqlite::memory:").await;
         // Tanpa header -> 401; kunci salah -> 401.
         let (status, _, _) = call(app.clone(), pub_req("/public/v1/patients", None)).await;
         assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
@@ -479,11 +454,11 @@ mod tests {
         assert!(body.as_array().map(|a| !a.is_empty()).unwrap_or(false));
     }
 
-    /// 100 request lolos, ke-101 -> 429 (router + limiter sungguhan).
+    /// 100 request lolos, ke-101 -> 429 (router + rate limit DB sungguhan).
     /// Kunci baru dipakai supaya hitungan mulai dari nol.
     #[tokio::test]
     async fn public_rate_limit_429_setelah_100() {
-        let (app, _db, key, _, _) = public_app().await;
+        let (app, _db, key, _, _) = public_app_on("sqlite::memory:").await;
         for i in 1..=100 {
             let (status, _, _) = call(app.clone(), pub_req("/public/v1/queue", Some(&key))).await;
             assert_eq!(
@@ -498,11 +473,46 @@ mod tests {
         assert_eq!(body["error"]["code"], "RATE_LIMITED");
     }
 
+    /// Bukti persistensi: hitung 100 request, "restart" (tutup pool +
+    /// router, buka lagi DB file yang sama), request ke-101 tetap 429.
+    /// Dengan HashMap in-memory lama, hitungan akan mulai dari nol.
+    #[tokio::test]
+    async fn public_rate_limit_bertahan_setelah_restart() {
+        let path = std::env::temp_dir()
+            .join(format!("waras-a4-ratelimit-{}.db", std::process::id()));
+        let base = path.to_string_lossy().into_owned();
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{base}{suffix}"));
+        }
+        // Boot 1: 100 request lolos.
+        let (app, db, key, _, _) = public_app_on(&base).await;
+        for i in 1..=100 {
+            let (status, _, _) = call(app.clone(), pub_req("/public/v1/queue", Some(&key))).await;
+            assert_eq!(status, axum::http::StatusCode::OK, "boot-1 request ke-{i}");
+        }
+        // "Restart": buang router + pool, buka lagi file yang sama.
+        // Boot 2 melewati seed (DB sudah berisi) tapi membuat kunci
+        // baru; kunci boot-1 (`key`) tetap tersimpan + tidak dicabut,
+        // jadi request berikut memakai kunci lama.
+        drop(app);
+        drop(db);
+        let (app, _db, _key2, _, _) = public_app_on(&base).await;
+        let (status, body, _) = call(app, pub_req("/public/v1/queue", Some(&key))).await;
+        assert_eq!(
+            status,
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "setelah restart, hitungan harus bertahan: {body}"
+        );
+        assert_eq!(body["error"]["code"], "RATE_LIMITED");
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{base}{suffix}"));
+        }
+    }
+
     /// Kunci yang dicabut -> 401; `last_used_at` terisi setelah
     /// panggilan sukses (bukti `touch_api_key` jalan).
     #[tokio::test]
-    async fn public_kunci_dicabut_ditolak() {
-        let (app, db, key, _, id) = public_app().await;
+    async fn public_kunci_dicabut_ditolak() {        let (app, db, key, _, id) = public_app_on("sqlite::memory:").await;
         // Sebelum dipakai: last_used_at masih kosong.
         let before = db.get_api_key(&id).await.expect("baca kunci").expect("ada");
         assert!(before.last_used_at.is_none());

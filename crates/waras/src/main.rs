@@ -99,6 +99,18 @@ async fn main() {
     {
         tracing::info!("Seed Fase 4 dimuat (tabel hd_machines masih kosong)");
     }
+    // Fase A/A4: DB lama yang ter-seed sebelum migrasi 0007 punya
+    // `patients.portal_password_hash` NULL — beri kata sandi portal
+    // demo `waras123` (idempotent; DB baru sudah terisi dari seed).
+    let backfilled = db
+        .backfill_portal_passwords()
+        .await
+        .expect("gagal backfill kata sandi portal");
+    if backfilled > 0 {
+        tracing::info!(
+            "Portal: {backfilled} pasien diberi kata sandi demo waras123 (backfill migrasi 0007)"
+        );
+    }
 
     // Jembatan nasional (FASE2.md §5/§7): config dari env, registry
     // berisi adapter nyata bila terkonfigurasi, `DisabledBridge` bila
@@ -157,10 +169,16 @@ async fn main() {
         .await
         .expect("gagal bind ke alamat");
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .expect("server berhenti dengan kesalahan");
+    // `into_make_service_with_connect_info`: supaya handler login
+    // bisa membaca IP peer (`ConnectInfo<SocketAddr>`) untuk kunci
+    // brute-force (Fase A/A4). Tanpa ini extractor ConnectInfo gagal.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .expect("server berhenti dengan kesalahan");
 }
 
 async fn shutdown_signal() {

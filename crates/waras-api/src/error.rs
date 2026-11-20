@@ -36,6 +36,23 @@ impl ApiError {
         Self(WarasError::Internal(msg.into()))
     }
 
+    /// Respons 429 JSON + header `Retry-After` (dipakai lockout login
+    /// dan rate limit API publik). Bukan `ApiError`: `WarasError`
+    /// tidak punya varian 429, dan respons ini butuh header — jadi
+    /// dibangun langsung sebagai `Response`, bukan lewat `IntoResponse`
+    /// `ApiError`.
+    pub fn rate_limited_response(retry_after_secs: u64, message: &str) -> Response {
+        use axum::http::header;
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, retry_after_secs.max(1).to_string())],
+            Json(json!({
+                "error": { "code": "RATE_LIMITED", "message": message }
+            })),
+        )
+            .into_response()
+    }
+
     /// Kode error untuk JSON (sesuai contoh kontrak: `NOT_FOUND`, dst.).
     pub fn code(&self) -> &'static str {
         match &self.0 {
