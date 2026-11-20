@@ -317,10 +317,52 @@ pub fn build_registry(config: &BridgeConfig) -> BridgeRegistry {
 }
 
 /// Klien HTTP bersama: rustls, timeout 30 detik, UA WARAS.
+///
+/// Proxy: bila env `WARAS_HTTP_PROXY` diisi (mis. `http://10.200.0.2:18080`),
+/// semua request bridge lewat proxy itu (eksplisit mengalahkan proxy env
+/// sistem). Bila kosong, reqwest memakai proxy dari env sistem
+/// (`HTTPS_PROXY`/`HTTP_PROXY`/`NO_PROXY`) atau koneksi langsung.
+/// Default: langsung (tanpa proxy). Proxy TIDAK pernah di-hardcode:
+/// sebagian deployment (mis. VPS yang IP-nya diblokir edge SATUSEHAT)
+/// butuh proxy, sebagian tidak.
 pub fn build_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+    let proxy = std::env::var("WARAS_HTTP_PROXY")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    build_http_client_with_proxy(proxy.as_deref())
+}
+
+/// Seperti [`build_http_client`], tapi proxy ditentukan eksplisit (dipakai
+/// pengujian; `None` = perilaku default reqwest terhadap env sistem).
+pub fn build_http_client_with_proxy(proxy_url: Option<&str>) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
-        .user_agent(concat!("WARAS/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .expect("gagal membangun klien HTTP bridge")
+        .user_agent(concat!("WARAS/", env!("CARGO_PKG_VERSION")));
+    if let Some(url) = proxy_url {
+        let proxy = reqwest::Proxy::all(url)
+            .unwrap_or_else(|e| panic!("WARAS_HTTP_PROXY tidak valid ({url}): {e}"));
+        builder = builder.proxy(proxy);
+    }
+    builder.build().expect("gagal membangun klien HTTP bridge")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn klien_http_tanpa_proxy_bisa_dibangun() {
+        let _client = build_http_client_with_proxy(None);
+    }
+
+    #[test]
+    fn klien_http_dengan_proxy_valid_bisa_dibangun() {
+        let _client = build_http_client_with_proxy(Some("http://127.0.0.1:18080"));
+    }
+
+    #[test]
+    #[should_panic(expected = "WARAS_HTTP_PROXY tidak valid")]
+    fn klien_http_dengan_proxy_tidak_valid_panik() {
+        let _client = build_http_client_with_proxy(Some("://bukan-url"));
+    }
 }

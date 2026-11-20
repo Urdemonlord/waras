@@ -258,11 +258,14 @@ dan catat di laporan — jangan `cargo update` online.
 
 ### 3.2 SATUSEHAT (`satusehat.rs`)
 
-- OAuth2 client credentials: POST `{auth_url}/accesstoken`, form
-  `grant_type=client_credentials`, header Basic base64
-  (`client_id:client_secret`). Respons: `access_token`, `expires_in`
-  (detik), `token_type`. Cache token + expiry di struct (Mutex);
-  refresh bila kedaluwarsa atau 401 (coba ulang sekali setelah refresh).
+- OAuth2 client credentials: POST `{auth_url}/accesstoken?grant_type=client_credentials`,
+  body form-urlencoded `client_id` + `client_secret`, TANPA header Basic
+  (Basic auth DITOLAK API asli dengan 401 "client_id or client_secret
+  combination is unacceptable" — terbukti live 2026-11-20; bentuk
+  query-grant + body inilah yang menghasilkan token 200). Respons:
+  `access_token`, `expires_in` (detik), `token_type`. Cache token + expiry
+  di struct (Mutex); refresh bila kedaluwarsa atau 401 (coba ulang sekali
+  setelah refresh).
 - Kirim resource: POST `{base_url}/{ResourceType}` (mis. `Patient`,
   `Encounter`, `Observation`, `Condition`, `MedicationRequest`,
   `AllergyIntolerance`), header `Authorization: Bearer <token>`,
@@ -606,7 +609,8 @@ di bawah masuk commit verifikasi di branch `fase-2-jembatan`.
 
 | Area | Hasil | Perbaikan |
 |---|---|---|
-| SATUSEHAT staging auth `…/oauth2/v1/accesstoken`, grant `client_credentials`, Basic auth | COCOK | — |
+| SATUSEHAT staging auth `…/oauth2/v1/accesstoken`, grant `client_credentials`, Basic auth | MISMATCH → DIPERBAIKI (20 Nov, bukti live) | Bentuk resmi: `POST …/accesstoken?grant_type=client_credentials`, body form `client_id` + `client_secret`, TANPA Basic. Adapter lama (Basic + form grant) ditolak staging 401 "combination is unacceptable"; bentuk baru token 200 `expires_in` 14399. Stub token di `satusehat.rs` kini KETAT: menolak Basic dan kredensial salah (401), supaya regresi gagal di tes |
+| Egress VPS langsung (129.226.193.34) ke SATUSEHAT staging + production | MISMATCH (blokir jaringan, bukan kode) → ADA JALAN | Edge SATUSEHAT membalas 403 bahkan tanpa auth (IP-level block). Via proxy Proton VPS (10.200.0.2:18080) tembus (401 tanpa auth, 200 dengan token). Dukungan proxy opt-in: env `WARAS_HTTP_PROXY` (mis. `http://10.200.0.2:18080`), dibaca `build_http_client()`; kosong = langsung / proxy env sistem (`HTTPS_PROXY`). Deploy di VPS WAJIB mengisi ini, kalau tidak bridge SATUSEHAT selalu Offline |
 | SATUSEHAT FHIR base `…/fhir-r4/v1`, POST `/{ResourceType}`, Bearer, token cache + refresh sekali setelah 401 | COCOK | — |
 | Patient: identifier NIK `https://fhir.kemkes.go.id/id/nik` | COCOK | — |
 | Encounter `class`: tanpa `system` | MISMATCH → DIPERBAIKI | `class.system` = `http://terminology.hl7.org/CodeSystem/v3-ActCode` |
@@ -658,6 +662,31 @@ di bawah masuk commit verifikasi di branch `fase-2-jembatan`.
   konformansi BPJS di atas bersandar pada dokumen, bukan probe live.
   Ulangi probe BPJS dari VPS / jaringan lain sebelum live.
 
+### 10.2b Verifikasi live dengan kredensial sandbox asli (20 Nov 2026)
+
+Kredensial sandbox SATUSEHAT (dari portal, tab Sandbox; nilai TIDAK
+pernah dicatat di repo/chat) disimpan di VPS `/home/meowlabs/waras.env`
+(mode 600). Adapter yang sudah diperbaiki dijalankan dari VPS lewat
+proxy Proton (`WARAS_HTTP_PROXY=http://10.200.0.2:18080`) dengan
+`crates/waras-bridge/examples/verify_satusehat.rs` (read-only: token +
+`GET /metadata` + `GET Patient` NIK dummy; tidak membuat/mengubah data):
+
+- `POST …/oauth2/v1/accesstoken?grant_type=client_credentials`
+  (body form `client_id` + `client_secret`, tanpa Basic) → **200**,
+  `expires_in` 14399. Bentuk Basic yang lama ditolak 401 di percobaan
+  sebelumnya dengan kredensial yang SAMA — jadi kredensialnya valid,
+  bentuk request-nya yang salah.
+- `GET …/fhir-r4/v1/metadata` (Bearer) → **200**, `fhirVersion` 4.0.1.
+- `GET …/fhir-r4/v1/Patient?identifier=https://fhir.kemkes.go.id/id/nik|0000000000000000`
+  → **200**, Bundle `total` 1 (staging ternyata punya satu pasien uji
+  dengan NIK dummy itu; hanya dibaca, tidak dibuat/diubah).
+- Egress: IP VPS langsung (129.226.193.34) → **403** dari edge SATUSEHAT
+  (staging + production, bahkan tanpa auth); via proxy → tembus. Deploy
+  di VPS WAJIB `WARAS_HTTP_PROXY`, kalau tidak bridge selalu Offline.
+- Endpoint token membatasi laju secara agresif (429 `throttled`, kira-kira
+  1 req/menit per client): beri jeda minimal 3 menit antar percobaan
+  token, jangan hammer.
+
 ### 10.3 Dokumen yang dipakai
 
 - SATUSEHAT: DeepWiki @ssecd/ihs (`deepwiki.com/ssecd/ihs/6.1-satusehat-platform`,
@@ -679,11 +708,12 @@ di bawah masuk commit verifikasi di branch `fase-2-jembatan`.
 
 ### 10.4 Yang masih butuh kredensial Arya (uji sandbox live)
 
-- SATUSEHAT: `client id` + `client secret` + `org id` (dari portal
-  SATUSEHAT / Kemenkes). Dengan itu: token staging asli → POST
-  Patient/Encounter/Observation sungguhan ke staging → validasi profil
-  SATUSEHAT → `participant`/`serviceProvider` + `meta.profile` +
-  kode KFA bisa dikonfirmasi.
+- SATUSEHAT: ✅ SUDAH — kredensial sandbox didapat 20 Nov, tersimpan di
+  VPS `/home/meowlabs/waras.env`, terverifikasi live (§10.2b): token 200,
+  metadata 200, Patient dummy 200. Sisa: POST Patient/Encounter/Observation
+  sungguhan ke staging untuk validasi profil (`participant`/
+  `serviceProvider` + `meta.profile` + kode KFA) — itu pengiriman data,
+  butuh keputusan Arya sebelum dilakukan.
 - BPJS: `cons id` + `secret key` + `user key` (dari bridging BPJS).
   Dengan itu: VClaim dev (eligibilitas, SEP insert/batal, rujukan),
   PCare dev (kunjungan + field), Antrean dev (add/batal + field

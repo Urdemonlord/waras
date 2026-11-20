@@ -1,11 +1,16 @@
 //! Adapter SATUSEHAT (FHIR R4).
 //!
-//! OAuth2 client credentials ke `{auth_url}/accesstoken`, token di-cache
-//! di struct sampai kedaluwarsa (leeway 30 detik) dan di-refresh sekali
-//! setelah 401. Resource dikirim POST `{base_url}/{ResourceType}` dengan
-//! body = `job.payload` (JSON FHIR dari `waras-core::fhir`); `Bundle`
-//! dikirim ke `{base_url}` (root). Validasi profil berjalan SEBELUM HTTP
-//! apa pun, supaya payload tidak lengkap tidak pernah sampai ke server.
+//! OAuth2 client credentials: POST `{auth_url}/accesstoken?grant_type=client_credentials`
+//! dengan `client_id` + `client_secret` di body form-urlencoded.
+//! JANGAN pakai HTTP Basic auth: API SATUSEHAT menolaknya dengan 401
+//! "client_id or client_secret combination is unacceptable" (terbukti
+//! live lawan staging 2026-11-20; bentuk query-grant + body ini yang
+//! menghasilkan token 200). Token di-cache di struct sampai kedaluwarsa
+//! (leeway 30 detik) dan di-refresh sekali setelah 401. Resource dikirim
+//! POST `{base_url}/{ResourceType}` dengan body = `job.payload` (JSON FHIR
+//! dari `waras-core::fhir`); `Bundle` dikirim ke `{base_url}` (root).
+//! Validasi profil berjalan SEBELUM HTTP apa pun, supaya payload tidak
+//! lengkap tidak pernah sampai ke server.
 //!
 //! Pemetaan error: 401 -> `Auth` (setelah satu refresh); 400/422 ->
 //! `Validation` (body dipotong 500 karakter); 429/5xx/transport -> `Http`
@@ -73,12 +78,20 @@ impl SatusehatBridge {
                 }
             }
         }
-        let url = format!("{}/accesstoken", self.config.auth_url.trim_end_matches('/'));
+        // Bentuk resmi (playbook Kemenkes; terbukti live 2026-11-20):
+        // grant di query, kredensial di body form. Basic auth DITOLAK
+        // API asli (401), jadi jangan pernah dikirim.
+        let url = format!(
+            "{}/accesstoken?grant_type=client_credentials",
+            self.config.auth_url.trim_end_matches('/')
+        );
         let resp = self
             .client
             .post(&url)
-            .basic_auth(&self.config.client_id, Some(&self.config.client_secret))
-            .form(&[("grant_type", "client_credentials")])
+            .form(&[
+                ("client_id", self.config.client_id.as_str()),
+                ("client_secret", self.config.client_secret.as_str()),
+            ])
             .send()
             .await
             .map_err(|e| BridgeError::Http(format!("gagal meminta token SATUSEHAT: {e}")))?;
@@ -131,6 +144,57 @@ impl SatusehatBridge {
             .send()
             .await
             .map_err(|e| BridgeError::Http(format!("gagal POST ke SATUSEHAT: {e}")))
+    }
+
+    /// GET baca-saja `{base_url}/{path}` dengan Bearer token (dipakai
+    /// verifikasi live, mis. `metadata` dan pencarian `Patient?identifier=…`).
+    /// TIDAK membuat, mengubah, atau menghapus data apa pun.
+    pub async fn get_json(&self, path: &str) -> Result<Value, BridgeError> {
+        if !self.configured() {
+            return Err(BridgeError::NotConfigured(
+                "SATUSEHAT belum dikonfigurasi (cek env di docs/FASE2.md)".to_string(),
+            ));
+        }
+        let url = format!(
+            "{}/{}",
+            self.config.base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+        let token = self.ensure_token(false).await?;
+        let mut resp = self
+            .client
+            .get(&url)
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(|e| BridgeError::Http(format!("gagal GET ke SATUSEHAT: {e}")))?;
+        if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+            // Token mungkin kedaluwarsa di sisi server: refresh sekali, coba ulang.
+            let token = self.ensure_token(true).await?;
+            resp = self
+                .client
+                .get(&url)
+                .bearer_auth(&token)
+                .send()
+                .await
+                .map_err(|e| BridgeError::Http(format!("gagal GET ke SATUSEHAT: {e}")))?;
+        }
+        let status = resp.status();
+        if !status.is_success() {
+            let body = truncate(&resp.text().await.unwrap_or_default(), 500);
+            let code = status.as_u16();
+            return Err(match code {
+                401 => BridgeError::Auth(format!("SATUSEHAT menolak token (401): {body}")),
+                429 => BridgeError::Http(format!("SATUSEHAT membatasi laju (429): {body}")),
+                _ if status.is_server_error() => {
+                    BridgeError::Http(format!("SATUSEHAT gagal (HTTP {code}): {body}"))
+                }
+                _ => BridgeError::Rejected { status: code, body },
+            });
+        }
+        resp.json()
+            .await
+            .map_err(|e| BridgeError::Unexpected(format!("respons SATUSEHAT bukan JSON: {e}")))
     }
 }
 
@@ -357,6 +421,7 @@ mod tests {
     #[derive(Default)]
     struct StubInner {
         token_hits: usize,
+        token_requests: Vec<TokenRecorded>,
         fhir_hits: usize,
         fhir_requests: Vec<Recorded>,
         /// Kembalikan 401 pada POST FHIR pertama, lalu sukses.
@@ -366,6 +431,14 @@ mod tests {
         /// Kembalikan status ini sebanyak `fail_times` panggilan FHIR pertama.
         fail_status: Option<u16>,
         fail_times: usize,
+    }
+
+    #[derive(Clone, Debug)]
+    struct TokenRecorded {
+        grant_in_query: bool,
+        has_basic_auth: bool,
+        client_id: Option<String>,
+        client_secret: Option<String>,
     }
 
     #[derive(Clone, Debug)]
@@ -379,6 +452,9 @@ mod tests {
         fn token_hits(&self) -> usize {
             self.inner.lock().unwrap().token_hits
         }
+        fn token_requests(&self) -> Vec<TokenRecorded> {
+            self.inner.lock().unwrap().token_requests.clone()
+        }
         fn fhir_hits(&self) -> usize {
             self.inner.lock().unwrap().fhir_hits
         }
@@ -387,17 +463,125 @@ mod tests {
         }
     }
 
-    async fn token_handler(State(state): State<StubState>) -> Json<Value> {
-        let n = {
-            let mut inner = state.inner.lock().unwrap();
-            inner.token_hits += 1;
-            inner.token_hits
-        };
-        Json(json!({
-            "access_token": format!("TOKEN-CONTOH-{n}"),
-            "expires_in": 3600,
-            "token_type": "Bearer"
-        }))
+    /// Parse `a=b&c=d` (query atau body form) dengan percent-decode minimal.
+    /// Cukup untuk nilai ASCII seperti client id/secret di stub ini.
+    fn parse_form(s: &str) -> std::collections::HashMap<String, String> {
+        let mut out = std::collections::HashMap::new();
+        for pair in s.split('&') {
+            if pair.is_empty() {
+                continue;
+            }
+            let mut it = pair.splitn(2, '=');
+            let k = it.next().unwrap_or("");
+            let v = it.next().unwrap_or("");
+            out.insert(pct_decode(k), pct_decode(v));
+        }
+        out
+    }
+
+    fn pct_decode(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '%' {
+                let h1 = chars.next().unwrap_or('0');
+                let h2 = chars.next().unwrap_or('0');
+                let b = u8::from_str_radix(&format!("{h1}{h2}"), 16).unwrap_or(b'?');
+                out.push(b as char);
+            } else if c == '+' {
+                out.push(' ');
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// Stub token KETAT: meniru API SATUSEHAT asli (terbukti live 2026-11-20).
+    /// Bentuk resmi: `grant_type=client_credentials` di QUERY + `client_id`
+    /// + `client_secret` di body form. Basic auth DITOLAK (401) seperti API
+    /// asli — stub lama yang menerima apa pun menyembunyikan bug ini.
+    async fn token_handler(
+        State(state): State<StubState>,
+        uri: axum::http::Uri,
+        headers: HeaderMap,
+        body: String,
+    ) -> (StatusCode, Json<Value>) {
+        let query = parse_form(uri.query().unwrap_or(""));
+        let form = parse_form(&body);
+        let has_basic = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_ascii_lowercase().starts_with("basic "))
+            .unwrap_or(false);
+        let mut inner = state.inner.lock().unwrap();
+        inner.token_hits += 1;
+        let n = inner.token_hits;
+        inner.token_requests.push(TokenRecorded {
+            grant_in_query: query.get("grant_type").map(|s| s.as_str())
+                == Some("client_credentials"),
+            has_basic_auth: has_basic,
+            client_id: form.get("client_id").cloned(),
+            client_secret: form.get("client_secret").cloned(),
+        });
+        if has_basic {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"resourceType": "OperationOutcome", "issue": [{"code": "value", "details": {"text": "Basic auth tidak diterima"}}]})),
+            );
+        }
+        if query.get("grant_type").map(|s| s.as_str()) != Some("client_credentials")
+            || form.get("client_id").map(|s| s.as_str()) != Some("CONTOH-CLIENT-ID")
+            || form.get("client_secret").map(|s| s.as_str()) != Some("CONTOH-CLIENT-SECRET")
+        {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"resourceType": "OperationOutcome", "issue": [{"code": "value", "details": {"text": "client_id or client_secret combination is unacceptable"}}]})),
+            );
+        }
+        (
+            StatusCode::OK,
+            Json(json!({
+                "access_token": format!("TOKEN-CONTOH-{n}"),
+                "expires_in": 3600,
+                "token_type": "Bearer"
+            })),
+        )
+    }
+
+    /// Bearer stub harus diawali `Bearer TOKEN-CONTOH-` (token hasil stub).
+    fn bearer_ok(headers: &HeaderMap) -> bool {
+        headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.starts_with("Bearer TOKEN-CONTOH-"))
+            .unwrap_or(false)
+    }
+
+    async fn metadata_handler(headers: HeaderMap) -> (StatusCode, Json<Value>) {
+        if !bearer_ok(&headers) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"resourceType": "OperationOutcome", "issue": [{"code": "invalid-access-token", "details": {"text": "Invalid Access Token."}}]})),
+            );
+        }
+        (
+            StatusCode::OK,
+            Json(json!({"resourceType": "CapabilityStatement", "fhirVersion": "4.0.1"})),
+        )
+    }
+
+    async fn patient_search_handler(headers: HeaderMap) -> (StatusCode, Json<Value>) {
+        if !bearer_ok(&headers) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"resourceType": "OperationOutcome", "issue": [{"code": "invalid-access-token", "details": {"text": "Invalid Access Token."}}]})),
+            );
+        }
+        (
+            StatusCode::OK,
+            Json(json!({"resourceType": "Bundle", "type": "searchset", "total": 0, "entry": []})),
+        )
     }
 
     async fn fhir_handler(
@@ -405,6 +589,26 @@ mod tests {
         axum::extract::Path(resource): axum::extract::Path<String>,
         headers: HeaderMap,
         Json(body): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        fhir_post(&state, &resource, &headers, body).await
+    }
+
+    /// POST Patient di rute statik (axum mengutamakan rute statik
+    /// `/fhir-r4/v1/Patient` di atas `/{resource}`; tanpa ini POST Patient
+    /// jadi 405 karena rute itu hanya punya GET pencarian).
+    async fn patient_post_handler(
+        State(state): State<StubState>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        fhir_post(&state, "Patient", &headers, body).await
+    }
+
+    async fn fhir_post(
+        state: &StubState,
+        resource: &str,
+        headers: &HeaderMap,
+        body: Value,
     ) -> (StatusCode, Json<Value>) {
         let mut inner = state.inner.lock().unwrap();
         inner.fhir_hits += 1;
@@ -472,6 +676,11 @@ mod tests {
         let state = StubState::default();
         let app = Router::new()
             .route("/oauth2/v1/accesstoken", post(token_handler))
+            .route("/fhir-r4/v1/metadata", axum::routing::get(metadata_handler))
+            .route(
+                "/fhir-r4/v1/Patient",
+                axum::routing::get(patient_search_handler).post(patient_post_handler),
+            )
             .route("/fhir-r4/v1/{resource}", post(fhir_handler))
             .route("/fhir-r4/v1", post(bundle_root_handler))
             .with_state(state.clone());
@@ -816,5 +1025,81 @@ mod tests {
         let (_state, auth_url, base_url) = spawn_stub().await;
         let bridge = make_bridge(&auth_url, &base_url);
         assert_eq!(bridge.health().await, BridgeHealth::Online);
+    }
+
+    #[tokio::test]
+    async fn token_memakai_bentuk_resmi_bukan_basic() {
+        let (state, auth_url, base_url) = spawn_stub().await;
+        let bridge = make_bridge(&auth_url, &base_url);
+        assert_eq!(bridge.health().await, BridgeHealth::Online);
+        let reqs = state.token_requests();
+        assert_eq!(reqs.len(), 1, "token diminta sekali");
+        assert!(reqs[0].grant_in_query, "grant_type harus di query");
+        assert!(!reqs[0].has_basic_auth, "Basic auth tidak boleh dikirim");
+        assert_eq!(reqs[0].client_id.as_deref(), Some("CONTOH-CLIENT-ID"));
+        assert_eq!(
+            reqs[0].client_secret.as_deref(),
+            Some("CONTOH-CLIENT-SECRET")
+        );
+    }
+
+    #[tokio::test]
+    async fn kredensial_salah_token_401_jadi_auth() {
+        let (state, auth_url, base_url) = spawn_stub().await;
+        let bridge = SatusehatBridge::new(
+            SatusehatConfig {
+                enabled: true,
+                base_url: base_url.clone(),
+                auth_url: auth_url.clone(),
+                client_id: "CONTOH-CLIENT-ID".to_string(),
+                client_secret: "SALAH".to_string(),
+                org_id: "CONTOH-ORG-ID".to_string(),
+            },
+            crate::build_http_client(),
+        );
+        let err = bridge
+            .send(&job("Patient", fhir::patient_resource(&seed_patient())))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, BridgeError::Auth(_)),
+            "kredensial salah -> Auth, dapat {err:?}"
+        );
+        assert_eq!(state.token_hits(), 1, "token 401 tidak dicoba ulang");
+    }
+
+    #[tokio::test]
+    async fn stub_menolak_basic_auth() {
+        let (state, auth_url, _base_url) = spawn_stub().await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{auth_url}/accesstoken"))
+            .basic_auth("CONTOH-CLIENT-ID", Some("CONTOH-CLIENT-SECRET"))
+            .form(&[("grant_type", "client_credentials")])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "Basic auth harus ditolak seperti API asli"
+        );
+        assert_eq!(state.token_hits(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_json_metadata_dan_cari_pasien() {
+        let (state, auth_url, base_url) = spawn_stub().await;
+        let bridge = make_bridge(&auth_url, &base_url);
+        let meta = bridge.get_json("metadata").await.unwrap();
+        assert_eq!(meta["fhirVersion"], "4.0.1");
+        let found = bridge
+            .get_json("Patient?identifier=https://fhir.kemkes.go.id/id/nik|0000000000000000")
+            .await
+            .unwrap();
+        assert_eq!(found["resourceType"], "Bundle");
+        assert_eq!(found["total"], 0);
+        // Token yang sama dipakai ulang untuk kedua GET.
+        assert_eq!(state.token_hits(), 1);
     }
 }

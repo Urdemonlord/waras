@@ -170,6 +170,11 @@ WARAS_WORKER_ENABLED=true
 WARAS_WORKER_INTERVAL_SECS=10
 WARAS_WORKER_BATCH=10
 WARAS_OUTBOX_MAX_ATTEMPTS=5
+# WARAS_HTTP_PROXY=http://10.200.0.2:18080  # OPSIONAL, kosong = langsung.
+# Isi bila IP server diblokir edge SATUSEHAT/BPJS (VPS 129.226.193.34
+# diblokir 403 bahkan tanpa auth; lewat proxy Proton VPS tembus).
+# Berlaku untuk SEMUA adapter (SATUSEHAT + BPJS); tanpa ini reqwest
+# memakai proxy env sistem (HTTPS_PROXY/HTTP_PROXY) atau langsung.
 ```
 
 **Terverifikasi terhadap dokumen/sandbox resmi (20 Nov 2026, lihat
@@ -185,11 +190,19 @@ Aplicares DIPERBAIKI ke host `new-api.bpjs-kesehatan.go.id` +
 builder FHIR DIPERBAIKI ke profil SATUSEHAT (Encounter `class.system` +
 `identifier` org, Observation LOINC + `category` vital-signs +
 `valueQuantity` UCUM, Condition coding `active`/`resolved`,
-MedicationRequest `intent: order`, dateTime format `T`). Probe live
-(tanpa kredensial asli): SATUSEHAT staging FHIR 401 `invalid-access-token`
-dan token endpoint 429 throttled (keduanya membuktikan host + bentuk
-error); probe BPJS terblokir jaringan sandbox (TLS nyambung, HTTP
-timeout 20–30 dtk) — ulangi dari VPS sebelum live.
+MedicationRequest `intent: order`, dateTime format `T`). **Bentuk auth
+SATUSEHAT DIPERBAIKI setelah terbukti salah secara live:** adapter lama
+mengirim HTTP Basic auth + form `grant_type`, staging menolaknya 401
+"client_id or client_secret combination is unacceptable"; bentuk resmi
+adalah `POST …/accesstoken?grant_type=client_credentials` dengan
+`client_id` + `client_secret` di body form (tanpa Basic). **Verifikasi
+live dengan kredensial sandbox asli (20 Nov 2026, via proxy VPS):**
+token 200 (`expires_in` 14399), `GET /metadata` 200 (FHIR 4.0.1),
+`GET Patient` NIK dummy 200 (total 1, pasien uji staging) — semuanya lewat adapter yang
+sudah diperbaiki. Egress: IP VPS langsung (129.226.193.34) diblokir 403
+oleh edge SATUSEHAT (staging + production, bahkan tanpa auth), jadi
+deploy di VPS WAJIB mengisi `WARAS_HTTP_PROXY` (proxy Proton VPS);
+probe BPJS dari VPS masih harus diulang sebelum live.
 
 **Belum terverifikasi / masih gap:** path `SEP/delete`,
 `Rujukan/insert`, seluruh PCare `kunjungan` (path + field), Antrean
