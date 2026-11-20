@@ -10,8 +10,12 @@ use waras_core::{
 };
 
 impl Db {
-    /// Daftar pasien, urut nama. `search` mencocokkan nama / NIK / RM
-    /// (LIKE, case-insensitive di SQLite untuk ASCII).
+    /// Daftar pasien, urut nama. `search` mencocokkan nama / NIK / RM.
+    /// Case-insensitive di KEDUA backend: SQLite `LIKE` sudah
+    /// case-insensitive untuk ASCII, tapi PostgreSQL `LIKE` case-sensitive
+    /// — jadi bandingkan `LOWER(kolom) LIKE LOWER(?)` (A2, terbukti di
+    /// PG 16: `LIKE '%siti%'` 0 baris, `ILIKE` 1 baris; `LOWER` jalan
+    /// di SQLite maupun PG).
     pub async fn list_patients(
         &self,
         search: Option<&str>,
@@ -21,7 +25,7 @@ impl Db {
                 let like = format!("%{}%", q.trim());
                 sqlx::query_as(
                     "SELECT * FROM patients
-                     WHERE name LIKE ? OR nik LIKE ? OR id LIKE ?
+                     WHERE LOWER(name) LIKE LOWER(?) OR LOWER(nik) LIKE LOWER(?) OR LOWER(id) LIKE LOWER(?)
                      ORDER BY name ASC",
                 )
                 .bind(&like)
@@ -157,5 +161,51 @@ impl Db {
             note: note.map(|s| s.to_string()),
             recorded_at: now_naive(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn seeded_db() -> Db {
+        let db = Db::connect_for_tests().await.expect("buka DB test");
+        db.migrate().await.expect("migrasi");
+        assert!(db.seed_if_empty().await.expect("seed"));
+        db
+    }
+
+    /// Pencarian pasien case-insensitive di kedua backend (A2: PG `LIKE`
+    /// case-sensitive, jadi query memakai `LOWER()` — test ini gagal di
+    /// PG sebelum perbaikan, lolos sesudahnya).
+    #[tokio::test]
+    async fn search_is_case_insensitive() {
+        let db = seeded_db().await;
+        for q in ["siti", "SITI", "Siti", "sItI rAhMaWaTi"] {
+            let found = db
+                .list_patients(Some(q))
+                .await
+                .unwrap_or_else(|e| panic!("cari {q:?}: {e}"));
+            assert_eq!(found.len(), 1, "cari {q:?} harus 1 hasil");
+            assert_eq!(found[0].id, "RM-000812");
+        }
+        // Cari NIK + RM (case-insensitive juga untuk RM).
+        assert_eq!(
+            db.list_patients(Some("3374021205850001"))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.list_patients(Some("rm-000812")).await.unwrap().len(),
+            1,
+            "RM huruf kecil harus ketemu"
+        );
+        assert!(db
+            .list_patients(Some("tidak-ada-nama-ini"))
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

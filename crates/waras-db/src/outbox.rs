@@ -116,9 +116,32 @@ impl OutboxRow {
 impl Db {
     /// Enqueue idempotent: `INSERT OR IGNORE` atas `idempotency_key`.
     /// Kembalikan `true` bila baris baru dibuat, `false` bila kunci sudah
-    /// ada. Bila `job.id` kosong, isi `OBX-######` berikutnya (pola yang
-    /// sama seperti `RX-####` di `prescriptions.rs`).
+    /// ada. `enqueue_outbox_once` memegang `Db::alloc_lock` selama
+    /// hitung id + INSERT; retry maks 5x di sini hanya jaring pengaman
+    /// untuk tabrakan antar proses. (Pelanggaran PK atas id, bukan atas
+    /// idempotency_key — yang terakhir ditangani `ON CONFLICT DO
+    /// NOTHING` / `INSERT OR IGNORE` dan mengembalikan `false`, bukan
+    /// error.)
     pub async fn enqueue_outbox(&self, job: &OutboxJob) -> Result<bool, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self.enqueue_outbox_once(job).await {
+                Ok(b) => return Ok(b),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id outbox".into())))
+    }
+
+    async fn enqueue_outbox_once(&self, job: &OutboxJob) -> Result<bool, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock).
+        let _alloc = self.alloc_lock.lock().await;
         let id = if job.id.trim().is_empty() {
             let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM outbox")
                 .fetch_all(&self.pool)
@@ -520,9 +543,9 @@ mod tests {
     use waras_core::bridge::{OutboxDestination, OutboxStatus};
 
     async fn seeded_db() -> Db {
-        let db = Db::connect("sqlite::memory:")
+        let db = Db::connect_for_tests()
             .await
-            .expect("buka in-memory");
+            .expect("buka DB test");
         db.migrate().await.expect("migrasi");
         assert!(db.seed_if_empty().await.expect("seed"));
         db

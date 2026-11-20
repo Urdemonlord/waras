@@ -137,7 +137,7 @@ impl Db {
         .await
         .map_err(db_err)?;
         let total_paid: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE invoice_id = ?",
+            "SELECT CAST(COALESCE(SUM(amount), 0) AS BIGINT) FROM payments WHERE invoice_id = ?",
         )
         .bind(id)
         .fetch_one(&self.pool)

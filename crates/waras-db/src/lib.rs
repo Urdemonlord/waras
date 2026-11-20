@@ -73,6 +73,25 @@ use sqlx::{Describe, Either, Execute, Executor, Transaction, AnyPool};
 use waras_core::types::{Gender, Insurance, PrescriptionStatus};
 use waras_core::WarasError;
 
+/// Ganti segmen nama database dalam URL Postgres
+/// (`postgres://user:pass@host:port/db_lama?query` -> `.../db_baru?query`).
+/// Dipakai `connect_for_tests` (tanpa crate `url` baru). `None` bila
+/// URL tidak punya skema `://` atau tidak punya segmen path.
+fn replace_db_in_url(url: &str, new_db: &str) -> Option<String> {
+    let scheme_end = url.find("://")? + 3;
+    let path_start = url[scheme_end..].find('/')? + scheme_end;
+    let after_path = &url[path_start + 1..];
+    let db_end = after_path
+        .find(|c| c == '?' || c == '#')
+        .map(|i| i + path_start + 1)
+        .unwrap_or(url.len());
+    let mut out = String::with_capacity(url.len() + new_db.len());
+    out.push_str(&url[..path_start + 1]);
+    out.push_str(new_db);
+    out.push_str(&url[db_end..]);
+    Some(out)
+}
+
 /// Tanggal klinik ("hari ini"): env `WARAS_TODAY`, default `2026-11-19`
 /// (tanggal desain, KONTRAK §0). Semua seed dan KPI memakai tanggal ini.
 pub fn clinic_today() -> NaiveDate {
@@ -517,6 +536,15 @@ impl<'a> DbTx<'a> {
 #[derive(Debug, Clone)]
 pub struct Db {
     pool: DbPool,
+    /// Mutex proses untuk alokasi id baca-max-lalu-insert (A2): tanpa
+    /// ini dua penulis bersamaan di proses yang sama menghitung id yang
+    /// sama dan yang kedua gagal pelanggaran PK — retry 5x saja tidak
+    /// cukup bila 20 thread tersinkron (tiap ronde hanya 1 yang lolos,
+    /// butuh ~20 ronde). Kunci ini membuat hitung-max + INSERT atomik
+    /// antar task dalam satu proses; retry tetap ada sebagai jaring
+    /// pengaman untuk tabrakan antar proses. Hanya dipakai tiga jalur
+    /// tulis bersamaan (antrean, resep, outbox); tidak pernah bersarang.
+    alloc_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl Db {
@@ -532,7 +560,10 @@ impl Db {
         let pool = DbPool::connect_sqlite(&url, if in_memory { 1 } else { 5 })
             .await
             .map_err(|e| WarasError::Database(format!("gagal membuka DB {path}: {e}")))?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            alloc_lock: Arc::new(tokio::sync::Mutex::new(())),
+        })
     }
 
     /// Buka pool PostgreSQL (mode rumah sakit). `url` bentuk
@@ -542,7 +573,56 @@ impl Db {
         let pool = DbPool::connect_postgres(url)
             .await
             .map_err(|e| WarasError::Database(format!("gagal membuka DB postgres: {e}")))?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            alloc_lock: Arc::new(tokio::sync::Mutex::new(())),
+        })
+    }
+
+    /// Buka DB untuk test (Fase A, A2): bila env `WARAS_TEST_PG_URL`
+    /// diisi (`postgres://user:pass@host:5432/db_template`), buat satu
+    /// database Postgres FRESH per pemanggilan (nama unik
+    /// `waras_t<pid>_<n>`, dibuat lewat koneksi admin ke database
+    /// `postgres`) lalu connect ke sana. Bila env kosong/tidak diisi,
+    /// SQLite in-memory seperti biasa.
+    ///
+    /// Satu database per test supaya test boleh jalan paralel tanpa
+    /// berebut skema/seed. Database test TIDAK di-drop otomatis (test
+    /// tidak tahu kapan pool terakhir dipakai); bersihkan berkala:
+    /// `psql -c "SELECT 'DROP DATABASE \"' || datname || '\";' FROM
+    /// pg_database WHERE datname LIKE 'waras_t%'"` lalu jalankan
+    /// hasilnya. Nama dibuat dari pid + counter atomik saja (tanpa
+    /// crate `url` baru — parsing manual di bawah).
+    pub async fn connect_for_tests() -> Result<Self, WarasError> {
+        let url = match std::env::var("WARAS_TEST_PG_URL") {
+            Ok(u) if !u.trim().is_empty() => u.trim().to_string(),
+            _ => return Db::connect("sqlite::memory:").await,
+        };
+        static NEXT_TEST_DB: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT_TEST_DB.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let name = format!("waras_t{}_{}", std::process::id(), n);
+        let admin_url = replace_db_in_url(&url, "postgres").ok_or_else(|| {
+            WarasError::Database(format!(
+                "WARAS_TEST_PG_URL tidak bisa diparse: {url}"
+            ))
+        })?;
+        let admin = DbPool::connect_postgres(&admin_url).await.map_err(|e| {
+            WarasError::Database(format!("gagal membuka DB postgres (admin): {e}"))
+        })?;
+        sqlx::query(&format!("CREATE DATABASE \"{name}\""))
+            .execute(&admin.inner)
+            .await
+            .map_err(|e| {
+                WarasError::Database(format!("gagal membuat database test {name}: {e}"))
+            })?;
+        drop(admin);
+        let test_url = replace_db_in_url(&url, &name).ok_or_else(|| {
+            WarasError::Database(format!(
+                "WARAS_TEST_PG_URL tidak bisa diparse: {url}"
+            ))
+        })?;
+        Db::connect_postgres(&test_url).await
     }
 
     /// Backend yang dipakai koneksi ini: `"sqlite"` atau `"postgres"`.
@@ -673,6 +753,17 @@ pub(crate) fn db_err(e: sqlx::Error) -> WarasError {
     WarasError::Database(e.to_string())
 }
 
+/// Apakah pesan error DB ini pelanggaran unique/PK (A2)? Dipakai retry
+/// alokasi id baca-max-lalu-insert: di Postgres dua penulis bersamaan
+/// bisa menghitung id yang sama dan yang kedua gagal `duplicate key
+/// value violates unique constraint`; di SQLite pesannya `UNIQUE
+/// constraint failed`. Hanya pola itu yang di-retry (maks 5x) — error
+/// lain diteruskan apa adanya.
+pub(crate) fn is_unique_violation_msg(msg: &str) -> bool {
+    msg.contains("duplicate key value violates unique constraint")
+        || msg.contains("UNIQUE constraint failed")
+}
+
 pub(crate) fn fmt_dt(dt: NaiveDateTime) -> String {
     dt.format("%Y-%m-%d %H:%M:%S").to_string()
 }
@@ -735,9 +826,9 @@ mod tests {
     use waras_core::types::DashboardKpis;
 
     async fn seeded_db() -> Db {
-        let db = Db::connect("sqlite::memory:")
+        let db = Db::connect_for_tests()
             .await
-            .expect("buka in-memory");
+            .expect("buka DB test");
         db.migrate().await.expect("migrasi");
         assert!(db.seed_if_empty().await.expect("seed"));
         db
@@ -760,6 +851,23 @@ mod tests {
             clinic_today(),
             NaiveDate::from_ymd_opt(2026, 11, 19).unwrap()
         );
+    }
+
+    #[test]
+    fn replace_db_in_url_swaps_database_segment() {
+        assert_eq!(
+            replace_db_in_url("postgres://waras:pass@127.0.0.1:5432/waras_pg_test", "waras_t1_0"),
+            Some("postgres://waras:pass@127.0.0.1:5432/waras_t1_0".to_string())
+        );
+        assert_eq!(
+            replace_db_in_url(
+                "postgres://u:p@127.0.0.1:5432/db?sslmode=disable",
+                "waras_t1_1"
+            ),
+            Some("postgres://u:p@127.0.0.1:5432/waras_t1_1?sslmode=disable".to_string())
+        );
+        assert_eq!(replace_db_in_url("postgres://127.0.0.1:5432", "x"), None);
+        assert_eq!(replace_db_in_url("not-a-url", "x"), None);
     }
 
     #[test]
@@ -789,6 +897,8 @@ mod tests {
 
     #[tokio::test]
     async fn db_mode_is_sqlite_by_default() {
+        // Sengaja SQLite langsung (bukan connect_for_tests): test ini
+        // membuktikan default-nya sqlite walau env PG diisi.
         let db = Db::connect("sqlite::memory:").await.expect("buka in-memory");
         assert_eq!(db.mode(), "sqlite");
     }

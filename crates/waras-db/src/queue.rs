@@ -39,6 +39,10 @@ impl Db {
     }
 
     /// Ambil nomor antrean baru: nomor berikutnya per prefix poli + tanggal.
+    /// Alokasi nomor antrean: `take_queue_once` memegang `Db::alloc_lock`
+    /// selama hitung-max + INSERT, jadi penulis bersamaan dalam satu
+    /// proses tidak bisa menghitung nomor yang sama. Retry maks 5x di
+    /// sini hanya jaring pengaman untuk tabrakan antar proses.
     pub async fn take_queue(
         &self,
         patient_id: &str,
@@ -46,6 +50,35 @@ impl Db {
         doctor: &str,
         date: NaiveDate,
     ) -> Result<QueueEntry, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .take_queue_once(patient_id, poli, doctor, date)
+                .await
+            {
+                Ok(e) => return Ok(e),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi nomor antrean".into())))
+    }
+
+    async fn take_queue_once(
+        &self,
+        patient_id: &str,
+        poli: &str,
+        doctor: &str,
+        date: NaiveDate,
+    ) -> Result<QueueEntry, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let prefix = poli_prefix(poli);
         let numbers: Vec<String> = sqlx::query_scalar(
             "SELECT number FROM queue_entries WHERE date = ? AND number LIKE ?",

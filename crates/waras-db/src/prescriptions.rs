@@ -30,8 +30,35 @@ impl Db {
 
     /// Seperti `prescribe`, tapi status awal bisa diminta
     /// (mis. MenungguKonfirmasi untuk resep pengganti). Default pemanggil
-    /// biasa tetap Aktif lewat `prescribe`.
+    /// biasa tetap Aktif lewat `prescribe`. `prescribe_as_once` memegang
+    /// `Db::alloc_lock` selama hitung id + INSERT + audit; retry maks 5x
+    /// di sini hanya jaring pengaman untuk tabrakan antar proses.
     pub async fn prescribe_as(
+        &self,
+        actor: &str,
+        input: NewPrescription,
+        requested: PrescriptionStatus,
+    ) -> Result<MedicationRequest, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .prescribe_as_once(actor, input.clone(), requested)
+                .await
+            {
+                Ok(rx) => return Ok(rx),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id resep".into())))
+    }
+
+    async fn prescribe_as_once(
         &self,
         actor: &str,
         input: NewPrescription,
@@ -51,6 +78,10 @@ impl Db {
         // ("Amoxicillin 500 mg 500 mg 1x1").
         let dosage = waras_core::dosage::normalize_dosage(&input.drug_name, &input.dosage);
 
+        // Kunci alokasi (lihat Db::alloc_lock): hitung id + INSERT + audit
+        // harus atomik antar task dalam satu proses. Baca encounter/alergi
+        // di atas sengaja di luar kunci supaya seksi kritis tetap pendek.
+        let _alloc = self.alloc_lock.lock().await;
         let ids_all: Vec<String> = sqlx::query_scalar("SELECT id FROM medication_requests")
             .fetch_all(&self.pool)
             .await

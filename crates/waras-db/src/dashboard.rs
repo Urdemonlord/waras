@@ -105,7 +105,7 @@ impl Db {
         // -- tagihan belum lunas hari ini --------------------------------------
         let (unpaid_idr, unpaid_count): (i64, i64) = {
             let row: (Option<i64>, i64) = sqlx::query_as(
-                "SELECT COALESCE(SUM(amount), 0), COUNT(*) FROM invoices
+                "SELECT CAST(COALESCE(SUM(amount), 0) AS BIGINT), COUNT(*) FROM invoices
                  WHERE status IN ('menunggu', 'cicilan')
                    AND substr(created_at, 1, 10) = ?",
             )
@@ -164,7 +164,7 @@ mod tests {
     use crate::clinic_today;
 
     async fn seeded_db() -> Db {
-        let db = Db::connect("sqlite::memory:").await.expect("buka in-memory");
+        let db = Db::connect_for_tests().await.expect("buka DB test");
         db.migrate().await.expect("migrasi");
         assert!(db.seed_if_empty().await.expect("seed"));
         db

@@ -54,7 +54,7 @@ async fn seeded_app() -> Router {
 /// (stub SATUSEHAT/BPJS). Mengembalikan juga `Db` supaya test bisa
 /// menjalankan `worker::run_once` langsung.
 async fn seeded_app_with_config(config: BridgeConfig) -> (Router, Arc<Db>) {
-    let db = Db::connect("sqlite::memory:").await.expect("buka in-memory");
+    let db = Db::connect_for_tests().await.expect("buka DB test");
     db.migrate().await.expect("migrasi");
     assert!(db.seed_if_empty().await.expect("seed"), "seed harus jalan");
     let db = Arc::new(db);
@@ -217,12 +217,14 @@ async fn auth_me_returns_user_from_token() {
 
 #[tokio::test]
 async fn health_is_public() {
-    let app = seeded_app().await;
+    // Mode mengikuti backend DB yang dipakai test ini (A2: di run
+    // Postgres nilainya "postgres", bukan "sqlite").
+    let (app, db) = seeded_app_with_config(disabled_config()).await;
     let (s, v, _) = call(app, req("GET", "/api/health", None, None)).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["status"], "ok");
     assert_eq!(v["version"], "0.1.0");
-    assert_eq!(v["mode"], "sqlite");
+    assert_eq!(v["mode"], db.mode());
     assert_eq!(v["today"], "2026-11-19");
 }
 

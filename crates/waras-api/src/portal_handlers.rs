@@ -244,7 +244,7 @@ mod tests {
     }
 
     async fn portal_app() -> Router {
-        let db = Db::connect("sqlite::memory:").await.expect("buka in-memory");
+        let db = Db::connect_for_tests().await.expect("buka DB test");
         db.migrate().await.expect("migrasi");
         assert!(db.seed_if_empty().await.expect("seed"), "seed harus jalan");
         let db = Arc::new(db);
