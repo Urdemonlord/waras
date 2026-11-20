@@ -151,9 +151,19 @@ WARAS_TEST_PG_URL=postgres://waras:waras@127.0.0.1:5432/waras_pg_test cargo test
   bin 0, api 82, bridge 35, core 32, db 76, web 3 — **228 lolos,
   0 gagal** (EXIT=0). Durasi membengkak karena CPU sandbox berbagi
   (api 731 dtk, db 648 dtk); bukan indikasi lambatnya aplikasi.
-- Postgres (TODO — angka diisi setelah run penuh selesai):
-  bin _, api _, bridge _, core _, db _ (termasuk
-  `search_is_case_insensitive`) — **_ lolos, _ gagal**.
+  Run ulang SQLite pada kode final (229 test, termasuk
+  `search_is_case_insensitive`): bin 0, api 82, bridge 35, core 32,
+  db 77, web 3 — **229 lolos, 0 gagal** (EXIT=0; api 282 dtk,
+  db 201 dtk). Jadi total yang sama di kedua backend.
+- Postgres (21 Nov, kode final, 229 test): bin 0, api 82, bridge 35,
+  core 32, db 77, web 3 — **229 lolos, 0 gagal** (EXIT=0).
+  Termasuk `search_is_case_insensitive`,
+  `enqueue_is_idempotent_on_key` (cabang ON CONFLICT di PG nyata),
+  dan `postgres_smoke_via_env`. Run pertama sempat 81/82 karena
+  `health_is_public` assert mode `"sqlite"` harfiah — bukan bug
+  aplikasi (server benar mengembalikan `"postgres"`); test dibuat
+  backend-aware (`mode == db.mode()`), lalu run kedua hijau penuh.
+  Durasi: api 335 dtk, db 265 dtk (CPU sandbox berbagi).
 
 Database test `waras_t*` tidak di-drop otomatis; bersihkan berkala:
 ```sql
@@ -165,15 +175,15 @@ lalu jalankan hasilnya sebagai superuser.
 ## 5. Perubahan KPI / data seed
 
 Tidak ada perubahan semantik seed. Data yang BERUBAH di `waras_pg`
-hanya akibat alur tulis verifikasi §1 + uji beban §3 (bukan akibat
-perbaikan kode): antrean 44 → 45+ (A-045 dari flow, +100 dari beban
-pertama, +... dari beban ulang), resep 8 → 10+ (RX-1048 Diblokir
-Amoxicillin regresi, RX-1049 Paracetamol, +39 lolos beban pertama),
-lab order 8 → 9 (LAB-2218 KRITIS — `lab_critical` dasbor 1 → 2 di
-DB ini), klaim 9 → 10 (CLM-5518), IGD 8 → 9, admisi 7 → 8
-(ADM-...-008, sudah dipulangkan), radiologi 7 → 8 (RAD-0918).
-`waras_pg_test` tidak pernah di-seed (hanya template URL); database
-per-test `waras_t*` fresh tiap test.
+(cluster kedua, setelah install ulang) hanya akibat alur tulis
+verifikasi §1 + uji beban §3 (bukan akibat perbaikan kode):
+antrean 44 → 250 (A-045 flow, +91 beban retry, +14 probe, +100 beban
+final), resep 8 → 201 (RX-1048 Diblokir Amoxicillin regresi,
+RX-1049 Paracetamol, +91 +100 beban), lab order 8 → 9 (LAB-2218
+KRITIS — `lab_critical` dasbor 1 → 2 di DB ini), klaim 9 → 10
+(CLM-5518), IGD 8 → 9, admisi 7 → 8 (ADM-...-008, sudah
+dipulangkan), radiologi 7 → 8 (RAD-0918), outbox 0 → 185 (worker
+men-queue event resep yang dibuat saat beban — bukan seed).
 
 ## 6. Yang masih terbuka / batasan PG
 
@@ -191,13 +201,16 @@ per-test `waras_t*` fresh tiap test.
   lama, bukan spesifik PG).
 - Uji beban di sini 20 pengguna / 200 tulis di sandbox berbagi CPU;
   batas kapasitas per mode (SQLite vs Postgres) adalah Fase C/C2.
-- Server boot verifikasi memakai biner DEBUG (`target/debug/waras`);
-  release build + boot ulang dicatat di §7.
+- Release build OK (17 mnt 38 dtk, biner 15,7 MB) dan biner release
+  di-boot di :3103 terhadap `waras_pg` (health `mode: "postgres"`,
+  login dokter OK) lalu dimatikan lagi; server :3102 yang dibiarkan
+  jalan memakai biner DEBUG.
 
 ## 7. Verifikasi akhir (koordinator — ulangi sebelum integrasi)
 
 ```
-sudo pg_ctlcluster 16 main start   # bila cluster sistem dipakai; bila data dir workspace, lihat pg-server.txt
+# Bila VM sandbox habis diganti (PG hilang): bash ~/workspace/waras/.fase-a-scratch/reinstall-pg.sh
+sudo pg_ctlcluster 16 main start   # lalu cek: pg_lsclusters
 WARAS_TEST_PG_URL=postgres://waras:waras@127.0.0.1:5432/waras_pg_test cargo test --offline   # Postgres
 cargo test --offline               # SQLite
 cargo build --release --offline
