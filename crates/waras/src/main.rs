@@ -1,13 +1,17 @@
-//! WARAS server binary: one binary, SQLite clinic mode.
+//! WARAS server binary: one binary, SQLite clinic mode by default,
+//! PostgreSQL hospital mode when `WARAS_DATABASE_URL` is set.
 //!
-//! Startup: open the SQLite file (default `./waras.db`), run embedded
-//! migrations, seed Fase 1 demo data when the database is empty, then serve
-//! the API + UI on one port.
+//! Startup: open the database (SQLite file default `./waras.db`, or
+//! Postgres via `WARAS_DATABASE_URL`), run embedded migrations, seed
+//! demo data when the database is empty, then serve the API + UI on
+//! one port.
 //!
 //! Configuration (environment):
 //! - `WARAS_HOST` (default `127.0.0.1`)
 //! - `WARAS_PORT` (default `3000`)
 //! - `WARAS_DB` (default `waras.db`, relative to the working directory)
+//! - `WARAS_DATABASE_URL` (bila berisi `postgres://...` -> mode
+//!   PostgreSQL; bila kosong -> SQLite via `WARAS_DB`)
 //! - `WARAS_TODAY` (default `2026-11-19`, the clinic date used for "hari ini"
 //!   in seed data and dashboard KPIs)
 //! - `RUST_LOG` (default `waras=info,tower_http=info`)
@@ -33,9 +37,34 @@ async fn main() {
         .unwrap_or(3000);
     let db_path = std::env::var("WARAS_DB").unwrap_or_else(|_| "waras.db".to_string());
 
-    let db = Db::connect(&db_path)
-        .await
-        .expect("gagal membuka basis data SQLite");
+    // Backend database (FASE3.md §10): `WARAS_DATABASE_URL` berisi
+    // `postgres://...` (atau `postgresql://...`) -> mode PostgreSQL
+    // (rumah sakit); kosong / tidak ada -> SQLite via `WARAS_DB`.
+    // Nilai terisi tapi bukan postgres://: peringatan + tetap SQLite
+    // (jangan gagal boot karena salah ketik env di klinik). URL TIDAK
+    // pernah di-log (bisa berisi kata sandi).
+    let db_url = std::env::var("WARAS_DATABASE_URL")
+        .ok()
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty());
+    let db = match db_url.as_deref() {
+        Some(url) if url.starts_with("postgres://") || url.starts_with("postgresql://") => {
+            Db::connect_postgres(url)
+                .await
+                .expect("gagal membuka basis data PostgreSQL")
+        }
+        Some(_) => {
+            tracing::warn!(
+                "WARAS_DATABASE_URL diisi tapi bukan postgres://...; memakai SQLite"
+            );
+            Db::connect(&db_path)
+                .await
+                .expect("gagal membuka basis data SQLite")
+        }
+        None => Db::connect(&db_path)
+            .await
+            .expect("gagal membuka basis data SQLite"),
+    };
     db.migrate().await.expect("gagal menjalankan migrasi");
     db.seed_if_empty()
         .await
@@ -78,11 +107,23 @@ async fn main() {
         .parse()
         .expect("WARAS_HOST/WARAS_PORT tidak valid");
 
+    // Label basis data untuk log: URL Postgres tidak pernah dicetak
+    // (bisa berisi kata sandi).
+    let db_label = if db.mode() == "postgres" {
+        "PostgreSQL (WARAS_DATABASE_URL)".to_string()
+    } else {
+        db_path.clone()
+    };
     tracing::info!(
-        "WARAS v{} siap — mode klinik (SQLite), tanggal klinik {}, basis data {}, dengarkan di http://{}",
+        "WARAS v{} siap — mode {}, tanggal klinik {}, basis data {}, dengarkan di http://{}",
         env!("CARGO_PKG_VERSION"),
+        if db.mode() == "postgres" {
+            "rumah sakit (PostgreSQL)"
+        } else {
+            "klinik (SQLite)"
+        },
         today,
-        db_path,
+        db_label,
         addr
     );
     tracing::info!("Login seed: NIP 198505122010011001 (dr. Ahmad Hidayat) / kata sandi waras123");

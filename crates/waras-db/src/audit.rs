@@ -56,7 +56,7 @@ impl Db {
             &details,
         );
         let details_s = details.to_string();
-        let result = sqlx::query(
+        sqlx::query(
             "INSERT INTO audit_log (timestamp, actor, action, resource_type,
                  resource_id, details, prev_hash, entry_hash)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -72,7 +72,16 @@ impl Db {
         .execute(&self.pool)
         .await
         .map_err(db_err)?;
-        let id = result.last_insert_rowid();
+        // ID diambil lewat lookup `entry_hash`, BUKAN
+        // `last_insert_rowid()`: hasil `AnyPool` (`AnyQueryResult`)
+        // tidak punya rowid — dan backend SQLite-nya `Any` pun tidak
+        // meneruskan rowid (`last_insert_id` selalu `None`). Lookup ini
+        // berlaku sama di SQLite maupun Postgres.
+        let id: i64 = sqlx::query_scalar("SELECT id FROM audit_log WHERE entry_hash = ?")
+            .bind(&entry_hash)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(db_err)?;
         Ok(AuditEntry {
             id,
             timestamp,

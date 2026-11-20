@@ -205,7 +205,7 @@ impl Db {
         )
         .bind(now_iso)
         .bind(limit)
-        .fetch_all(&mut *tx)
+        .fetch_all(&mut tx)
         .await
         .map_err(db_err)?;
         let updated_at = fmt_dt(now_naive());
@@ -223,7 +223,7 @@ impl Db {
             )
             .bind(&updated_at)
             .bind(&row.id)
-            .execute(&mut *tx)
+            .execute(&mut tx)
             .await
             .map_err(db_err)?
             .rows_affected();
@@ -264,7 +264,7 @@ impl Db {
         let row: Option<OutboxRow> =
             sqlx::query_as("SELECT * FROM outbox WHERE id = ? LIMIT 1")
                 .bind(id)
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&mut tx)
                 .await
                 .map_err(db_err)?;
         let job = match row {
@@ -283,7 +283,7 @@ impl Db {
         .bind(external_id)
         .bind(&updated_at)
         .bind(id)
-        .execute(&mut *tx)
+        .execute(&mut tx)
         .await
         .map_err(db_err)?;
 
@@ -309,7 +309,7 @@ impl Db {
                         sqlx::query(&q)
                             .bind(external_id)
                             .bind(&job.resource_id)
-                            .execute(&mut *tx)
+                            .execute(&mut tx)
                             .await
                             .map_err(db_err)?;
                     }
@@ -319,7 +319,7 @@ impl Db {
                         );
                         sqlx::query(&q)
                             .bind(&job.resource_id)
-                            .execute(&mut *tx)
+                            .execute(&mut tx)
                             .await
                             .map_err(db_err)?;
                     }
@@ -343,7 +343,7 @@ impl Db {
                     )
                     .bind(no_sep)
                     .bind(&job.resource_id)
-                    .execute(&mut *tx)
+                    .execute(&mut tx)
                     .await
                     .map_err(db_err)?;
                 }

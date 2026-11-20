@@ -150,7 +150,7 @@ impl Db {
         let room_row: Option<DeliveryRoomRow> =
             sqlx::query_as("SELECT * FROM delivery_rooms WHERE id = ? LIMIT 1")
                 .bind(room)
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&mut tx)
                 .await
                 .map_err(db_err)?;
         let room_row = match room_row {
@@ -172,7 +172,7 @@ impl Db {
         let prefix = format!("VK-{date_part}-");
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM deliveries WHERE id LIKE ?")
             .bind(format!("{prefix}%"))
-            .fetch_all(&mut *tx)
+            .fetch_all(&mut tx)
             .await
             .map_err(db_err)?;
         let seq = crate::next_seq_from_ids(&ids, 1);
@@ -194,12 +194,12 @@ impl Db {
         .bind(plan)
         .bind(room)
         .bind(clinic_now_string())
-        .execute(&mut *tx)
+        .execute(&mut tx)
         .await
         .map_err(db_err)?;
         sqlx::query("UPDATE delivery_rooms SET status = 'terisi' WHERE id = ?")
             .bind(room)
-            .execute(&mut *tx)
+            .execute(&mut tx)
             .await
             .map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;
@@ -224,7 +224,7 @@ impl Db {
         let row: Option<DeliveryRow> =
             sqlx::query_as("SELECT * FROM deliveries WHERE id = ? LIMIT 1")
                 .bind(id)
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&mut tx)
                 .await
                 .map_err(db_err)?;
         let delivery = match row {
@@ -238,13 +238,13 @@ impl Db {
         sqlx::query("UPDATE deliveries SET status = ? WHERE id = ?")
             .bind(status)
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut tx)
             .await
             .map_err(db_err)?;
         if status.eq_ignore_ascii_case("selesai") {
             sqlx::query("UPDATE delivery_rooms SET status = 'kosong' WHERE id = ?")
                 .bind(&delivery.room)
-                .execute(&mut *tx)
+                .execute(&mut tx)
                 .await
                 .map_err(db_err)?;
         }

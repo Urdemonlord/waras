@@ -139,7 +139,7 @@ impl Db {
         let bed: Option<WardBedRow> =
             sqlx::query_as("SELECT * FROM ward_beds WHERE id = ? LIMIT 1")
                 .bind(bed_id)
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&mut tx)
                 .await
                 .map_err(db_err)?;
         let bed = match bed {
@@ -157,7 +157,7 @@ impl Db {
         let prefix = format!("ADM-{date_part}-");
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM admissions WHERE id LIKE ?")
             .bind(format!("{prefix}%"))
-            .fetch_all(&mut *tx)
+            .fetch_all(&mut tx)
             .await
             .map_err(db_err)?;
         let seq = crate::next_seq_from_ids(&ids, 1);
@@ -180,13 +180,13 @@ impl Db {
         .bind(if fall_risk { 1 } else { 0 })
         .bind(admission_status_to_str(AdmissionStatus::Dirawat))
         .bind(&now)
-        .execute(&mut *tx)
+        .execute(&mut tx)
         .await
         .map_err(db_err)?;
         sqlx::query("UPDATE ward_beds SET status = 'terisi', updated_at = ? WHERE id = ?")
             .bind(&now)
             .bind(bed_id)
-            .execute(&mut *tx)
+            .execute(&mut tx)
             .await
             .map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;
@@ -219,13 +219,13 @@ impl Db {
         .bind(admission_status_to_str(AdmissionStatus::Pulang))
         .bind(&now)
         .bind(id)
-        .execute(&mut *tx)
+        .execute(&mut tx)
         .await
         .map_err(db_err)?;
         sqlx::query("UPDATE ward_beds SET status = 'dibersihkan', updated_at = ? WHERE id = ?")
             .bind(&now)
             .bind(&adm.bed_id)
-            .execute(&mut *tx)
+            .execute(&mut tx)
             .await
             .map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;
@@ -264,7 +264,7 @@ impl Db {
         let bed: Option<WardBedRow> =
             sqlx::query_as("SELECT * FROM ward_beds WHERE id = ? LIMIT 1")
                 .bind(bed_id)
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&mut tx)
                 .await
                 .map_err(db_err)?;
         let bed = match bed {
@@ -281,19 +281,19 @@ impl Db {
         sqlx::query("UPDATE admissions SET bed_id = ? WHERE id = ?")
             .bind(bed_id)
             .bind(id)
-            .execute(&mut *tx)
+            .execute(&mut tx)
             .await
             .map_err(db_err)?;
         sqlx::query("UPDATE ward_beds SET status = 'dibersihkan', updated_at = ? WHERE id = ?")
             .bind(&now)
             .bind(&adm.bed_id)
-            .execute(&mut *tx)
+            .execute(&mut tx)
             .await
             .map_err(db_err)?;
         sqlx::query("UPDATE ward_beds SET status = 'terisi', updated_at = ? WHERE id = ?")
             .bind(&now)
             .bind(bed_id)
-            .execute(&mut *tx)
+            .execute(&mut tx)
             .await
             .map_err(db_err)?;
         tx.commit().await.map_err(db_err)?;

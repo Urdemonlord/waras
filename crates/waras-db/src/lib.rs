@@ -1,5 +1,14 @@
-//! WARAS persistence: SQLx SQLite, migrasi, repository, seed, audit trail
+//! WARAS persistence: SQLx, migrasi, repository, seed, audit trail
 //! append-only + rantai hash SHA-256.
+//!
+//! Dua backend, satu kode query: SQLite (mode klinik, default) dan
+//! PostgreSQL (mode rumah sakit, `WARAS_DATABASE_URL`). Pool-nya
+//! `DbPool` di bawah — pembungkus `sqlx::any::AnyPool` yang menulis
+//! ulang placeholder `?` menjadi `$1, $2, ...` di mode Postgres, karena
+//! driver `Any` sqlx TIDAK menerjemahkan placeholder (SQL diteruskan
+//! verbatim ke Postgres, dan `?` di sana adalah operator JSON, bukan
+//! placeholder). Semua `sqlx::query` / `query_as` / `query_scalar` di
+//! crate ini tetap memakai `?` dan tidak tahu soal backend.
 //!
 //! Satu-satunya titik masuk: [`Db`]. Semua tipe domain berasal dari
 //! `waras-core`; crate ini hanya memetakan baris SQLite <-> tipe domain
@@ -10,31 +19,47 @@
 //! Tidak ada macro `query!`/`query_as!` (butuh DB saat compile).
 
 mod audit;
+mod casemix;
 mod claims;
 mod convert;
 mod dashboard;
 mod drugs;
 mod encounters;
 mod fhir_data;
+mod igd;
 mod invoices;
+mod lab;
 mod notifications;
+mod operasi;
 mod outbox;
 mod patients;
 mod prescriptions;
 mod queue;
+mod radiologi;
+mod ranap;
 mod rows;
 mod seed;
 mod seps;
 mod users;
 
+pub use lab::NewLabResult;
 pub use seed::seed;
 pub use waras_core::types::NewPrescription;
 
+use std::collections::HashMap;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
+
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Utc};
+use futures_core::future::BoxFuture;
+use futures_core::stream::{BoxStream, Stream};
 use sha2::{Digest, Sha256};
-use sqlx::sqlite::SqlitePoolOptions;
-use sqlx::SqlitePool;
+use sqlx::any::{
+    Any, AnyArguments, AnyPoolOptions, AnyQueryResult, AnyRow, AnyStatement, AnyTypeInfo,
+};
+use sqlx::{Describe, Either, Execute, Executor, Transaction, AnyPool};
 use waras_core::types::{Gender, Insurance, PrescriptionStatus};
 use waras_core::WarasError;
 
@@ -70,9 +95,418 @@ pub struct PrescriptionFilter {
     pub patient_id: Option<String>,
 }
 
+/// Pool database backend-agnostik (SQLite atau PostgreSQL).
+///
+/// Pembungkus `sqlx::any::AnyPool` + satu flag backend. Semua repo
+/// memakai `&self.pool` (atau `&mut tx`) sebagai `Executor<Database =
+/// Any>`, jadi tidak ada satu pun call site query yang berubah.
+///
+/// Di mode Postgres, SQL ditulis ulang `?` -> `$n` (lihat
+/// `DbPool::rewritten_sql`): sqlx `Any` TIDAK menerjemahkan
+/// placeholder, dan Postgres menolak `?` sebagai placeholder.
+#[derive(Clone)]
+pub(crate) struct DbPool {
+    inner: AnyPool,
+    postgres: bool,
+    /// Cache intern hasil rewrite per string SQL unik (`&'static`,
+    /// dibocorkan sekali per string — jumlah query di repo terbatas,
+    /// jadi totalnya beberapa KB). Perlu supaya stream hasil
+    /// `fetch_many` bisa meminjam SQL hasil rewrite tanpa meminjam
+    /// `String` lokal yang sudah di-drop.
+    cache: Arc<Mutex<HashMap<String, &'static str>>>,
+}
+
+impl std::fmt::Debug for DbPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DbPool")
+            .field("postgres", &self.postgres)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Transaksi atas `DbPool`.
+///
+/// Sengaja TIDAK mengimplementasikan `Deref` ke koneksi: supaya
+/// `&mut tx` di repo tetap berarti `&mut DbTx` (bukan
+/// `&mut AnyConnection`) dan query di dalam transaksi ikut ditulis
+/// ulang placeholder-nya di mode Postgres.
+pub(crate) struct DbTx<'a> {
+    tx: Transaction<'a, Any>,
+    postgres: bool,
+    cache: Arc<Mutex<HashMap<String, &'static str>>>,
+}
+
+impl std::fmt::Debug for DbTx<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DbTx")
+            .field("postgres", &self.postgres)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> DbTx<'a> {
+    /// Commit transaksi (drop tanpa commit = rollback, seperti biasa).
+    pub(crate) async fn commit(self) -> Result<(), sqlx::Error> {
+        self.tx.commit().await
+    }
+}
+
+// CATATAN transaksi: repo memakai `&mut tx` (bukan `&mut *tx`) untuk
+// `DbTx` — `DbTx` sengaja TIDAK mengimplementasikan `Deref`, supaya
+// `&mut tx` langsung berarti `&mut DbTx` dan query transaksi lewat
+// impl `Executor` di bawah (rewrite placeholder tetap jalan di mode
+// Postgres). `Deref<Target = Self>` dicoba dan DITOLAK compiler
+// (E0055, auto-deref rekursif); `Deref` ke `AnyConnection` juga
+// ditolak desain (query transaksi akan lolos tanpa rewrite).
+
+/// Tulis ulang placeholder `?` menjadi `$1, $2, ...` (Postgres).
+/// `?` di dalam literal string (`'...'`, `''` = escape), identifier
+/// (`"..."`), dan komentar `-- ...` dibiarkan apa adanya.
+fn rewrite_placeholders(sql: &str) -> String {
+    #[derive(PartialEq)]
+    enum St {
+        Normal,
+        Str,
+        Ident,
+        Comment,
+    }
+    let mut out = String::with_capacity(sql.len() + 8);
+    let mut n = 0u32;
+    let mut chars = sql.chars().peekable();
+    let mut st = St::Normal;
+    while let Some(c) = chars.next() {
+        match st {
+            St::Normal => match c {
+                '\'' => {
+                    st = St::Str;
+                    out.push(c);
+                }
+                '"' => {
+                    st = St::Ident;
+                    out.push(c);
+                }
+                '-' if chars.peek() == Some(&'-') => {
+                    st = St::Comment;
+                    out.push(c);
+                }
+                '?' => {
+                    n += 1;
+                    out.push_str(&format!("${n}"));
+                }
+                _ => out.push(c),
+            },
+            St::Str => {
+                out.push(c);
+                if c == '\'' {
+                    if chars.peek() == Some(&'\'') {
+                        out.push(chars.next().unwrap());
+                    } else {
+                        st = St::Normal;
+                    }
+                }
+            }
+            St::Ident => {
+                out.push(c);
+                if c == '"' {
+                    st = St::Normal;
+                }
+            }
+            St::Comment => {
+                out.push(c);
+                if c == '\n' {
+                    st = St::Normal;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Stream satu-item untuk kegagalan `take_arguments` di `fetch_many`
+/// (praktis tidak pernah terjadi untuk tipe argumen yang dipakai repo).
+struct OnceError {
+    err: Option<sqlx::Error>,
+}
+
+impl Stream for OnceError {
+    type Item = Result<Either<AnyQueryResult, AnyRow>, sqlx::Error>;
+
+    fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.err.take() {
+            Some(e) => Poll::Ready(Some(Err(e))),
+            None => Poll::Ready(None),
+        }
+    }
+}
+
+impl DbPool {
+    /// Pasang driver `Any` (SQLite + Postgres) sekali per proses.
+    fn install_drivers() {
+        sqlx::any::install_default_drivers();
+    }
+
+    async fn connect_sqlite(url: &str, max_connections: u32) -> Result<Self, sqlx::Error> {
+        Self::install_drivers();
+        let inner = AnyPoolOptions::new()
+            .max_connections(max_connections)
+            .connect(url)
+            .await?;
+        Ok(Self {
+            inner,
+            postgres: false,
+            cache: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    async fn connect_postgres(url: &str) -> Result<Self, sqlx::Error> {
+        Self::install_drivers();
+        let inner = AnyPoolOptions::new()
+            .max_connections(5)
+            .connect(url)
+            .await?;
+        Ok(Self {
+            inner,
+            postgres: true,
+            cache: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    pub(crate) fn is_postgres(&self) -> bool {
+        self.postgres
+    }
+
+    /// Mulai transaksi. Kueri di dalamnya dieksekusi lewat `DbTx`
+    /// (bukan koneksi mentah) supaya rewrite placeholder tetap jalan.
+    pub(crate) async fn begin(&self) -> Result<DbTx<'_>, sqlx::Error> {
+        let tx = self.inner.begin().await?;
+        Ok(DbTx {
+            tx,
+            postgres: self.postgres,
+            cache: Arc::clone(&self.cache),
+        })
+    }
+
+    /// SQL yang akan dieksekusi: di mode Postgres, `?` ditulis ulang
+    /// menjadi `$1, $2, ...`; di mode SQLite SQL dipakai apa adanya.
+    fn rewritten_sql<'s>(&self, sql: &'s str) -> &'s str {
+        if !self.postgres {
+            return sql;
+        }
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hit) = cache.get(sql) {
+            return hit;
+        }
+        let rewritten = rewrite_placeholders(sql);
+        let leaked: &'static str = Box::leak(rewritten.into_boxed_str());
+        cache.insert(sql.to_string(), leaked);
+        leaked
+    }
+
+    /// Ambil SQL + argumen + flag persistent dari query masuk; SQL
+    /// ditulis ulang bila perlu. `statement()` yang sudah di-prepare
+    /// diabaikan — repo ini tidak pernah memakai `.prepare()` eksplisit.
+    /// (Bentuk tuple, bukan `Query`, karena tipe `Query` tidak punya
+    /// path publik dari crate `sqlx`.)
+    ///
+    /// Mode Postgres MEMAKSA `persistent = false`. Alasannya bug di
+    /// sqlx 0.8.6 (`sqlx-core/src/any/arguments.rs`, `convert_to`):
+    /// `NULL` dari `Option<f64>` dikonversi ke `Option::<f32>::None`
+    /// (Real/Double tertukar), jadi eksekusi pertama sebuah statement
+    /// yang mengikat NULL di kolom float mendeklarasikan parameter itu
+    /// sebagai float4 di Parse; statement yang di-cache per koneksi
+    /// itu lalu menolak eksekusi berikut yang mengikat `Some(f64)`
+    /// ("incorrect binary data format in bind parameter N"). Buktinya
+    /// non-deterministik: seed `lab_results` gagal di baris 6 atau 7
+    /// tergantung koneksi pool mana yang menyiapkan statement-nya.
+    /// Tanpa cache (UNNAMED statement), tiap eksekusi me-Parse ulang
+    /// dengan tipe argumennya sendiri dan konsisten. Biayanya satu
+    /// round-trip Parse per query di mode Postgres; SQLite tidak kena
+    /// (tipenya dinamis) dan tetap memakai cache.
+    fn query_parts<'q, E>(
+        &self,
+        mut query: E,
+    ) -> Result<(&'q str, Option<AnyArguments<'q>>, bool), sqlx::Error>
+    where
+        E: Execute<'q, Any>,
+    {
+        let sql = self.rewritten_sql(query.sql());
+        let persistent = query.persistent() && !self.postgres;
+        let args = query.take_arguments().map_err(sqlx::Error::Encode)?;
+        Ok((sql, args, persistent))
+    }
+}
+
+impl<'c> Executor<'c> for &'c DbPool {
+    type Database = Any;
+
+    fn fetch_many<'e, 'q: 'e, E>(
+        self,
+        query: E,
+    ) -> BoxStream<'e, Result<Either<AnyQueryResult, AnyRow>, sqlx::Error>>
+    where
+        'c: 'e,
+        E: 'q + Execute<'q, Any>,
+    {
+        match self.query_parts(query) {
+            Ok((sql, args, persistent)) => {
+                let q = match args {
+                    Some(a) => sqlx::query_with(sql, a).persistent(persistent),
+                    None => sqlx::query(sql).persistent(persistent),
+                };
+                (&self.inner).fetch_many(q)
+            }
+            Err(e) => Box::pin(OnceError { err: Some(e) }),
+        }
+    }
+
+    fn fetch_optional<'e, 'q: 'e, E>(
+        self,
+        query: E,
+    ) -> BoxFuture<'e, Result<Option<AnyRow>, sqlx::Error>>
+    where
+        'c: 'e,
+        E: 'q + Execute<'q, Any>,
+    {
+        let pool = &self.inner;
+        Box::pin(async move {
+            let (sql, args, persistent) = self.query_parts(query)?;
+            let q = match args {
+                Some(a) => sqlx::query_with(sql, a).persistent(persistent),
+                None => sqlx::query(sql).persistent(persistent),
+            };
+            pool.fetch_optional(q).await
+        })
+    }
+
+    fn prepare_with<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+        parameters: &'e [AnyTypeInfo],
+    ) -> BoxFuture<'e, Result<AnyStatement<'q>, sqlx::Error>>
+    where
+        'c: 'e,
+    {
+        let sql = self.rewritten_sql(sql);
+        let pool = &self.inner;
+        Box::pin(async move { pool.prepare_with(sql, parameters).await })
+    }
+
+    fn describe<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+    ) -> BoxFuture<'e, Result<Describe<Any>, sqlx::Error>>
+    where
+        'c: 'e,
+    {
+        let sql = self.rewritten_sql(sql);
+        let pool = &self.inner;
+        Box::pin(async move { pool.describe(sql).await })
+    }
+}
+
+impl<'c, 'a> Executor<'c> for &'c mut DbTx<'a> {
+    type Database = Any;
+
+    fn fetch_many<'e, 'q: 'e, E>(
+        self,
+        query: E,
+    ) -> BoxStream<'e, Result<Either<AnyQueryResult, AnyRow>, sqlx::Error>>
+    where
+        'c: 'e,
+        E: 'q + Execute<'q, Any>,
+    {
+        // `&mut *self.tx` = `&mut AnyConnection` (Transaction deref ke
+        // koneksi); eksekutor koneksi itulah yang dipakai, bukan
+        // `&mut Transaction` (tidak ada impl Executor untuknya).
+        match self.query_parts(query) {
+            Ok((sql, args, persistent)) => {
+                let q = match args {
+                    Some(a) => sqlx::query_with(sql, a).persistent(persistent),
+                    None => sqlx::query(sql).persistent(persistent),
+                };
+                (&mut *self.tx).fetch_many(q)
+            }
+            Err(e) => Box::pin(OnceError { err: Some(e) }),
+        }
+    }
+
+    fn fetch_optional<'e, 'q: 'e, E>(
+        self,
+        query: E,
+    ) -> BoxFuture<'e, Result<Option<AnyRow>, sqlx::Error>>
+    where
+        'c: 'e,
+        E: 'q + Execute<'q, Any>,
+    {
+        Box::pin(async move {
+            let (sql, args, persistent) = self.query_parts(query)?;
+            let q = match args {
+                Some(a) => sqlx::query_with(sql, a).persistent(persistent),
+                None => sqlx::query(sql).persistent(persistent),
+            };
+            (&mut *self.tx).fetch_optional(q).await
+        })
+    }
+
+    fn prepare_with<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+        parameters: &'e [AnyTypeInfo],
+    ) -> BoxFuture<'e, Result<AnyStatement<'q>, sqlx::Error>>
+    where
+        'c: 'e,
+    {
+        let sql = self.rewritten_sql(sql);
+        Box::pin(async move { (&mut *self.tx).prepare_with(sql, parameters).await })
+    }
+
+    fn describe<'e, 'q: 'e>(
+        self,
+        sql: &'q str,
+    ) -> BoxFuture<'e, Result<Describe<Any>, sqlx::Error>>
+    where
+        'c: 'e,
+    {
+        let sql = self.rewritten_sql(sql);
+        Box::pin(async move { (&mut *self.tx).describe(sql).await })
+    }
+}
+
+impl<'a> DbTx<'a> {
+    fn rewritten_sql<'s>(&self, sql: &'s str) -> &'s str {
+        if !self.postgres {
+            return sql;
+        }
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hit) = cache.get(sql) {
+            return hit;
+        }
+        let rewritten = rewrite_placeholders(sql);
+        let leaked: &'static str = Box::leak(rewritten.into_boxed_str());
+        cache.insert(sql.to_string(), leaked);
+        leaked
+    }
+
+    /// Sama seperti `DbPool::query_parts`: mode Postgres memaksa
+    /// `persistent = false` (lihat penjelasan di sana — cache statement
+    /// per koneksi sqlx 0.8.6 meracuni tipe parameter NULL float).
+    fn query_parts<'q, E>(
+        &self,
+        mut query: E,
+    ) -> Result<(&'q str, Option<AnyArguments<'q>>, bool), sqlx::Error>
+    where
+        E: Execute<'q, Any>,
+    {
+        let sql = self.rewritten_sql(query.sql());
+        let persistent = query.persistent() && !self.postgres;
+        let args = query.take_arguments().map_err(sqlx::Error::Encode)?;
+        Ok((sql, args, persistent))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Db {
-    pool: SqlitePool,
+    pool: DbPool,
 }
 
 impl Db {
@@ -85,20 +519,47 @@ impl Db {
             format!("sqlite:{path}?mode=rwc")
         };
         let in_memory = url.contains(":memory:");
-        let pool = SqlitePoolOptions::new()
-            .max_connections(if in_memory { 1 } else { 5 })
-            .connect(&url)
+        let pool = DbPool::connect_sqlite(&url, if in_memory { 1 } else { 5 })
             .await
             .map_err(|e| WarasError::Database(format!("gagal membuka DB {path}: {e}")))?;
         Ok(Self { pool })
     }
 
-    /// Jalankan migrasi embedded (`migrations/0001_init.sql`).
-    pub async fn migrate(&self) -> Result<(), WarasError> {
-        sqlx::migrate!("./migrations")
-            .run(&self.pool)
+    /// Buka pool PostgreSQL (mode rumah sakit). `url` bentuk
+    /// `postgres://user:pass@host:5432/db` (skema `postgresql://`
+    /// juga diterima driver). Driver + migrasi dipilih dari skema URL.
+    pub async fn connect_postgres(url: &str) -> Result<Self, WarasError> {
+        let pool = DbPool::connect_postgres(url)
             .await
-            .map_err(|e| WarasError::Database(format!("migrasi gagal: {e}")))
+            .map_err(|e| WarasError::Database(format!("gagal membuka DB postgres: {e}")))?;
+        Ok(Self { pool })
+    }
+
+    /// Backend yang dipakai koneksi ini: `"sqlite"` atau `"postgres"`.
+    /// Dipakai `/api/health` (koordinator) + log startup + footer UI.
+    pub fn mode(&self) -> &'static str {
+        if self.pool.is_postgres() {
+            "postgres"
+        } else {
+            "sqlite"
+        }
+    }
+
+    /// Jalankan migrasi embedded. Direktori dipilih dari backend:
+    /// `migrations/` (SQLite) atau `migrations-pg/` (PostgreSQL),
+    /// nomor versi sama (0001–0004).
+    pub async fn migrate(&self) -> Result<(), WarasError> {
+        if self.pool.is_postgres() {
+            sqlx::migrate!("./migrations-pg")
+                .run(&self.pool.inner)
+                .await
+                .map_err(|e| WarasError::Database(format!("migrasi gagal: {e}")))
+        } else {
+            sqlx::migrate!("./migrations")
+                .run(&self.pool.inner)
+                .await
+                .map_err(|e| WarasError::Database(format!("migrasi gagal: {e}")))
+        }
     }
 
     /// Seed bila tabel `users` kosong. Idempotent; mengembalikan `true`
@@ -291,11 +752,91 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rewrite_placeholders_numbers_params() {
+        assert_eq!(
+            rewrite_placeholders("SELECT * FROM users WHERE username = ? OR nip = ?"),
+            "SELECT * FROM users WHERE username = $1 OR nip = $2"
+        );
+        // `?` di dalam literal string dibiarkan.
+        assert_eq!(
+            rewrite_placeholders("SELECT * FROM t WHERE a = '?' AND b = ?"),
+            "SELECT * FROM t WHERE a = '?' AND b = $1"
+        );
+        // Escape '' di dalam string tidak mengakhiri literal.
+        assert_eq!(
+            rewrite_placeholders("SELECT 'it''s ?' FROM t WHERE x = ?"),
+            "SELECT 'it''s ?' FROM t WHERE x = $1"
+        );
+        assert_eq!(rewrite_placeholders("SELECT 1"), "SELECT 1");
+        assert_eq!(
+            rewrite_placeholders(
+                "INSERT INTO outbox (id) VALUES (?) ON CONFLICT(id) DO NOTHING"
+            ),
+            "INSERT INTO outbox (id) VALUES ($1) ON CONFLICT(id) DO NOTHING"
+        );
+    }
+
+    #[tokio::test]
+    async fn db_mode_is_sqlite_by_default() {
+        let db = Db::connect("sqlite::memory:").await.expect("buka in-memory");
+        assert_eq!(db.mode(), "sqlite");
+    }
+
+    #[tokio::test]
+    async fn connect_postgres_refused_is_error_not_panic() {
+        // Tanpa server Postgres: konstruktor harus Err, bukan panic.
+        let r = Db::connect_postgres("postgres://127.0.0.1:1/waras").await;
+        assert!(r.is_err());
+    }
+
+    /// Smoke test jalur Postgres end-to-end (migrasi PG + seed + mode +
+    /// transaksi + id audit). Hanya jalan bila env `WARAS_TEST_PG_URL`
+    /// diisi, mis. `postgres://waras:pass@127.0.0.1:5432/waras_pg_test`;
+    /// bila kosong, test di-skip (pass) supaya `cargo test` biasa tetap
+    /// jalan tanpa server. DB harus KOSONG (fresh) — migrasi sqlx
+    /// menganggap skema yang dibuat manual tanpa `_sqlx_migrations`
+    /// sebagai belum dimigrasi dan ALTER 0002 akan gagal.
+    #[tokio::test]
+    async fn postgres_smoke_via_env() {
+        let Ok(url) = std::env::var("WARAS_TEST_PG_URL") else {
+            eprintln!("SKIP postgres_smoke_via_env (WARAS_TEST_PG_URL tidak diisi)");
+            return;
+        };
+        let db = Db::connect_postgres(&url)
+            .await
+            .expect("buka postgres");
+        assert_eq!(db.mode(), "postgres");
+        db.migrate().await.expect("migrasi PG");
+        db.seed_if_empty().await.expect("seed PG");
+        let patients = db.list_patients(None).await.expect("list pasien PG");
+        assert_eq!(patients.len(), 12, "seed Fase 1 + 2 pasien Fase 3");
+        // Transaksi + placeholder `?` di mode Postgres: klaim batch
+        // outbox (kosong) — membuktikan begin/commit + rewrite jalan.
+        let jobs = db
+            .claim_outbox_batch_atomic(10, "2026-11-19 00:00:00")
+            .await
+            .expect("claim batch PG");
+        assert!(jobs.is_empty());
+        // Audit: id hasil insert harus id nyata (> 0), bukan 0.
+        let entry = db
+            .log_audit(
+                "test-pg",
+                "test.smoke",
+                "test",
+                "T-PG",
+                serde_json::json!({"x": 1}),
+            )
+            .await
+            .expect("audit PG");
+        assert!(entry.id > 0, "id audit PG harus nyata, dapat {}", entry.id);
+    }
+
     #[tokio::test]
     async fn seed_loads_exact_counts() {
         let db = seeded_db().await;
         let patients = db.list_patients(None).await.unwrap();
-        assert_eq!(patients.len(), 10);
+        assert_eq!(patients.len(), 12);
         let queue = db.list_queue(clinic_today()).await.unwrap();
         assert_eq!(queue.len(), 44);
         let rx = db
@@ -327,7 +868,7 @@ mod tests {
     async fn seed_is_idempotent() {
         let db = seeded_db().await;
         assert!(!db.seed_if_empty().await.unwrap(), "seed kedua harus skip");
-        assert_eq!(db.list_patients(None).await.unwrap().len(), 10);
+        assert_eq!(db.list_patients(None).await.unwrap().len(), 12);
     }
 
     #[tokio::test]
@@ -552,8 +1093,8 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(p.id, "RM-000822");
-        let found = db.get_patient("RM-000822").await.unwrap().unwrap();
+        assert_eq!(p.id, "RM-000824");
+        let found = db.get_patient("RM-000824").await.unwrap().unwrap();
         assert_eq!(found.name, "Test Pasien");
     }
 
