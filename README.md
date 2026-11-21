@@ -11,12 +11,12 @@ dari paper desain
 (`~/workspace/your_files/waras-paper-simrs-modern/waras-paper-simrs-modern.pdf`,
 v4) dan desain UI FigCraft v16 (`~/workspace/waras/figcraft/`, file
 `waras-full-v16-lucide.figcraft`). Semua fase sudah merge ke `main`
-(Fase 4: commit `c23844c`); lihat `docs/FASE2.md`, `docs/FASE3.md`,
-`docs/FASE4.md`. **Versi: v0.1.0** (lihat `CHANGELOG.md`).
+(Fase 4: commit `c23844c`, Fase A: commit `554aec2`, tag `v0.1.0`); lihat `docs/FASE2.md`, `docs/FASE3.md`,
+`docs/FASE4.md`, `docs/FASE-A.md`. **Versi: v0.1.0** (lihat `CHANGELOG.md`).
 
 ## Demo live
 
-https://waras.meowlabs.id — deploy 20 November 2026, `main` @ `c23844c`,
+https://waras.meowlabs.id, deploy 21 November 2026, `main` @ `554aec2` (tag `v0.1.0`),
 `waras.service` di VPS Meow Labs (port internal 3200, nginx +
 Let's Encrypt, DNS A record via Cloudflare). Login memakai akun seed
 di bawah.
@@ -125,6 +125,7 @@ crates/
   waras-core/   tipe domain, aturan keamanan obat, RBAC, error, helper FHIR
   waras-db/     SQLx SQLite, migrasi, repository, seed, audit trail
   waras-api/    Axum: router, auth token sesi, guard RBAC, handler, UI statis
+  waras-bridge/ jembatan SATUSEHAT + BPJS, worker outbox, dekripsi AES + LZString
   waras-web/    aset statis (HTML/CSS/JS + ikon Lucide + logo) via rust-embed
   waras/        binary: config, migrasi, seed, serve
 docs/CONTRACT.md  kontrak antar-crate + spesifikasi seed (sumber kebenaran)
@@ -136,12 +137,12 @@ docs/CONTRACT.md  kontrak antar-crate + spesifikasi seed (sumber kebenaran)
 cargo test --offline
 ```
 
-117 tes: `waras-core` 16 (termasuk blokir penisilin + azithromycin
-lolos, FHIR AllergyIntolerance), `waras-db` 33 (seed, KPI, rantai
+241 tes: `waras-core` 32 (termasuk blokir penisilin + azithromycin
+lolos, FHIR AllergyIntolerance), `waras-db` 82 (seed, KPI, rantai
 audit, versi SOAP, dispensing, outbox idempotensi + klaim + retry
-otomatis), `waras-api` 45 (login, RBAC, alur penuh pasien→antrean→
+otomatis), `waras-api` 89 (login, RBAC, alur penuh pasien→antrean→
 encounter→SOAP, resep diblokir 422 / diizinkan, bayar tagihan, bundle
-FHIR, worker + endpoint jembatan dengan stub), `waras-bridge` 20
+FHIR, worker + endpoint jembatan dengan stub), `waras-bridge` 35
 (OAuth2 + token cache, tanda tangan BPJS, envelope, dekripsi AES),
 `waras-web` 3 (aset tertanam).
 
@@ -334,7 +335,7 @@ didokumentasikan):
   domain, bukan `daily_stats`): lab menunggu 3 (dulu 26), lab kritis 1
   (dulu 2), IGD merah 1 (dulu 3), bed 86/120 (tetap).
 
-## Ekosistem (Fase 4) — branch `fase-4-ekosistem`, belum deploy
+## Ekosistem (Fase 4), merge + deploy live 20 Nov 2026
 
 Fase 4 menuntaskan semua modul yang masih `segera` di sidebar
 (lihat `docs/FASE4.md` untuk kontrak lengkap). Setelah Fase 4,

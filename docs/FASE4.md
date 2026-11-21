@@ -542,8 +542,9 @@ portal/api-keys D dari laporan D.
   dan catat di laporan.
 - Portal Pasien (`/portal`): halaman sempit ala mobile (maksimal
   lebar ~480px, mengikuti layar desain 390×844): bila belum login
-  sebagai pasien, tampilkan form login NIK + tanggal lahir
-  (token disimpan di localStorage kunci TERPISAH
+  sebagai pasien, tampilkan form login NIK + kata sandi portal
+  (Fase A menggantikan desain awal NIK + tanggal lahir, lihat
+  `docs/FASE-A-A4.md`; token disimpan di localStorage kunci TERPISAH
   `waras-portal-token`, JANGAN menimpa token staf); bila sudah
   login, tampilkan janji, antrean, hasil lab, e-resep pasien itu
   (dari `/api/portal/*`). Bila dibuka staf dengan
@@ -615,14 +616,15 @@ Portal Pasien. (KEUANGAN, OPERASIONAL, INTEGRASI, SISTEM tetap.)
 
 ## 7. Portal pasien — keputusan desain (dicatat jujur)
 
-Login pasien memakai NIK + tanggal lahir. Ini kredensial kelas
-demo — umum dipakai portal RS Indonesia sebagai langkah pertama,
-tetapi BUKAN autentikasi kuat: NIK + tanggal lahir bisa diketahui
-orang lain. FASE4.md + README WAJIB menulis ini terbuka: untuk
-produksi, ganti dengan OTP (SMS/WA) atau kata sandi portal yang
-dibuat saat registrasi. JANGAN pernah menulis NIK lengkap di
-respons API publik/portal (sensor tengah). Token pasien tidak bisa
-mengakses endpoint staf apa pun.
+Login pasien memakai NIK + kata sandi portal (hash Argon2, lihat
+`docs/FASE-A-A4.md`). Desain awal Fase 4 memakai NIK + tanggal lahir,
+tetapi Fase A menggantikannya: NIK + tanggal lahir bisa diketahui
+orang lain dan bukan autentikasi kuat. Untuk produksi, opsi yang masih
+terbuka adalah OTP (SMS/WA); kata sandi portal yang dibuat saat
+registrasi sudah dipakai sekarang, tetapi belum ada endpoint set/ganti
+kata sandi (pasien baru dari registrasi belum bisa login portal).
+JANGAN pernah menulis NIK lengkap di respons API publik/portal (sensor
+tengah). Token pasien tidak bisa mengakses endpoint staf apa pun.
 
 ## 8. Penyimpangan yang didokumentasikan (bukan bug)
 
