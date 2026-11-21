@@ -118,7 +118,10 @@ Detail: `docs/FASE-A-A4.md`.
 - **Belum ada endpoint set/ganti kata sandi portal.** Pasien baru dari
   registrasi lahir dengan `portal_password_hash` NULL = tidak bisa login
   portal (`Db::set_portal_password` sudah tersedia; endpoint staf reset
-  + endpoint pasien ganti sendiri belum ada).
+  + endpoint pasien ganti sendiri belum ada). — SELESAI di
+  `docs/FASE-A-FOLLOWUP.md` item 1 (branch `fase-a-followup`):
+  `POST /api/patients/{id}/portal-password` (Admin) +
+  `POST /api/portal/change-password` (pasien, kata sandi lama wajib).
 - Race read-max-then-insert masih ada di jalur alokasi ID lain (pasien
   RM-######, encounter, invoice, klaim, admisi, order lab/radiologi,
   operasi, persalinan, HD, transfusi, staf, shift, kunci API) — baru
