@@ -88,6 +88,28 @@
     <div class="card-head"><img class="ic" src="/icons/cross-0B7285.png" alt=""><h2>E-resep aktif</h2></div>
     <div id="portal-prescriptions"><p class="empty-note">Memuat e-resep&hellip;</p></div>
   </div>
+  <div class="card" id="portal-change-card">
+    <div class="card-head"><h2>Ganti kata sandi portal</h2></div>
+    <form id="portal-change-form">
+      <div class="field"><label for="portal-current-password">Kata sandi lama</label><input id="portal-current-password" type="password" autocomplete="current-password" required></div>
+      <div class="field"><label for="portal-new-password">Kata sandi baru</label><input id="portal-new-password" type="password" autocomplete="new-password" required></div>
+      <div class="field"><label for="portal-new-password2">Ulangi kata sandi baru</label><input id="portal-new-password2" type="password" autocomplete="new-password" required></div>
+      <button class="btn primary block" type="submit">Ganti kata sandi</button>
+      <p class="form-error" id="portal-change-error"></p>
+      <p class="muted small" id="portal-change-ok" style="display:none;color:#16A34A">Kata sandi portal berhasil diganti.</p>
+    </form>
+    <p class="muted small">Minimal 8 karakter. Lima kali salah memasukkan kata sandi lama mengunci ganti kata sandi selama 15 menit.</p>
+  </div>
+  <div class="card" id="portal-staff-set-card" style="display:none">
+    <div class="card-head"><h2>Set kata sandi portal pasien</h2></div>
+    <form id="portal-staff-set-form">
+      <div class="field"><label for="portal-staff-new-password">Kata sandi portal baru</label><input id="portal-staff-new-password" type="password" autocomplete="new-password" required></div>
+      <button class="btn primary block" type="submit">Set kata sandi portal</button>
+      <p class="form-error" id="portal-staff-set-error"></p>
+      <p class="muted small" id="portal-staff-set-ok" style="display:none;color:#16A34A">Kata sandi portal pasien berhasil di-set.</p>
+    </form>
+    <p class="muted small">Hanya Admin. Dipakai untuk pasien baru yang belum punya kata sandi portal, atau mereset kata sandi pasien yang lupa. Minimal 8 karakter.</p>
+  </div>
   <button class="btn block" id="portal-logout" type="button">Keluar</button>
 </div>
 

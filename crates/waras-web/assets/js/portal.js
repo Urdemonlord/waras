@@ -87,6 +87,85 @@
     showLogin();
   }
 
+  // POST JSON mentah dengan token opsional (dipakai form kata sandi).
+  function postJson(path, token, body) {
+    var headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    return fetch(path, { method: 'POST', headers: headers, body: JSON.stringify(body) });
+  }
+
+  // Ganti kata sandi portal (mode pasien): POST
+  // /api/portal/change-password dengan kata sandi lama + baru.
+  async function submitChangePassword(ev) {
+    ev.preventDefault();
+    var errEl = document.getElementById('portal-change-error');
+    var okEl = document.getElementById('portal-change-ok');
+    errEl.classList.remove('on');
+    okEl.style.display = 'none';
+    var cur = document.getElementById('portal-current-password').value;
+    var nw = document.getElementById('portal-new-password').value;
+    var nw2 = document.getElementById('portal-new-password2').value;
+    if (nw !== nw2) {
+      errEl.textContent = 'Kata sandi baru tidak sama dengan ulangannya.';
+      errEl.classList.add('on');
+      return;
+    }
+    var btn = ev.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      var res = await postJson('/api/portal/change-password', get(PORTAL_KEY), { current_password: cur, new_password: nw });
+      var data = null;
+      try { data = await res.json(); } catch (e) { /* tanpa body */ }
+      if (!res.ok) {
+        if (res.status === 429) throw new Error('Terlalu banyak percobaan ganti kata sandi, coba lagi nanti.');
+        if (res.status === 401) throw new Error('Kata sandi lama tidak cocok.');
+        throw new Error((data && data.error && data.error.message) || ('HTTP ' + res.status));
+      }
+      okEl.style.display = '';
+      ev.target.reset();
+    } catch (e) {
+      errEl.textContent = e && e.message ? e.message : 'Ganti kata sandi gagal.';
+      errEl.classList.add('on');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // Set kata sandi portal pasien (mode staf, hanya Admin — server
+  // mengembalikan 403 untuk peran lain): POST
+  // /api/patients/{id}/portal-password.
+  var staffPatientId = null;
+  async function submitStaffSetPassword(ev) {
+    ev.preventDefault();
+    var errEl = document.getElementById('portal-staff-set-error');
+    var okEl = document.getElementById('portal-staff-set-ok');
+    errEl.classList.remove('on');
+    okEl.style.display = 'none';
+    var btn = ev.target.querySelector('button[type="submit"]');
+    btn.disabled = true;
+    try {
+      var res = await postJson(
+        '/api/patients/' + encodeURIComponent(staffPatientId || '') + '/portal-password',
+        get(STAFF_KEY),
+        { password: document.getElementById('portal-staff-new-password').value }
+      );
+      var data = null;
+      try { data = await res.json(); } catch (e) { /* tanpa body */ }
+      if (!res.ok) {
+        if (res.status === 403) throw new Error('Hanya Admin yang boleh set kata sandi portal.');
+        if (res.status === 404) throw new Error('Pasien tidak ditemukan.');
+        throw new Error((data && data.error && data.error.message) || ('HTTP ' + res.status));
+      }
+      okEl.style.display = '';
+      ev.target.reset();
+    } catch (e) {
+      errEl.textContent = e && e.message ? e.message : 'Set kata sandi gagal.';
+      errEl.classList.add('on');
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   function renderPatient(p) {
     document.getElementById('portal-name').textContent = p.name || '—';
     var meta = [];
@@ -158,6 +237,8 @@
       renderLab(lab);
       var rx = asList(await fetchJson('/api/portal/prescriptions', token).catch(function () { return []; }));
       renderPrescriptions(rx);
+      document.getElementById('portal-change-card').style.display = '';
+      document.getElementById('portal-staff-set-card').style.display = 'none';
       showMain();
     } catch (e) {
       if (e.status === 401) {
@@ -192,6 +273,8 @@
       renderPrescriptions(rx);
       renderAppointments([]);
       document.getElementById('portal-appointments').innerHTML = '<p class="empty-note">Janji pasien hanya tampil di mode pasien.</p>';
+      document.getElementById('portal-change-card').style.display = 'none';
+      document.getElementById('portal-staff-set-card').style.display = '';
       showMain();
     } catch (e) {
       if (e.status === 401) {
@@ -203,8 +286,14 @@
   }
 
   document.addEventListener('DOMContentLoaded', function () {
+    // Listener form kata sandi dipasang di semua mode (bukan hanya di
+    // jalur tanpa token di bawah — mode pasien auto-login dan mode staf
+    // keluar lebih awal dari fungsi ini).
+    document.getElementById('portal-change-form').addEventListener('submit', submitChangePassword);
+    document.getElementById('portal-staff-set-form').addEventListener('submit', submitStaffSetPassword);
     var params = new URLSearchParams(location.search);
     var staffPatient = params.get('pasien');
+    staffPatientId = staffPatient;
     if (staffPatient) { loadStaffMode(staffPatient); return; }
     var token = get(PORTAL_KEY);
     if (token) { loadPatientMode(token); return; }
