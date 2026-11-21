@@ -359,6 +359,14 @@ pub fn router(state: AppState) -> Router {
             post(api_key_handlers::revoke_api_key),
         )
         .route("/api/auth/patient-login", post(portal_handlers::patient_login))
+        .route(
+            "/api/patients/{id}/portal-password",
+            post(portal_handlers::set_portal_password_staff),
+        )
+        .route(
+            "/api/portal/change-password",
+            post(portal_handlers::change_portal_password),
+        )
         .route("/api/portal/me", get(portal_handlers::portal_me))
         .route(
             "/api/portal/appointments",

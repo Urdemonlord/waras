@@ -17,18 +17,18 @@
 //! lengkap — selalu disensor tengah (`mask_nik`).
 
 use axum::{
-    extract::{FromRequestParts, State},
+    extract::{FromRequestParts, Path, State},
     http::{header, request::Parts, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use waras_core::types::Patient;
+use waras_core::{rbac::Action, types::Patient};
 use waras_db::{clinic_today, Db, PrescriptionFilter};
 
 use crate::{
-    auth::{ClientIp, JsonBody},
+    auth::{require, AuthUser, ClientIp, JsonBody},
     error::ApiError,
     AppState,
 };
@@ -150,6 +150,144 @@ pub async fn patient_login(
         })),
     )
         .into_response())
+}
+
+/// Panjang minimum kata sandi portal baru (set staf maupun ganti
+/// pasien). Aturan baru item 1 follow-up Fase A: tidak ada aturan
+/// panjang di codebase sebelumnya; 8 dipilih karena sama dengan kata
+/// sandi seed `waras123` — pasien tidak dipaksa lebih ketat dari demo
+/// yang sudah berjalan.
+pub const MIN_PORTAL_PASSWORD_LEN: usize = 8;
+
+fn valid_new_password(password: &str) -> ApiResult<()> {
+    if password.is_empty() {
+        return Err(ApiError::validation("kata sandi baru wajib diisi"));
+    }
+    if password.chars().count() < MIN_PORTAL_PASSWORD_LEN {
+        return Err(ApiError::validation(format!(
+            "kata sandi portal minimal {MIN_PORTAL_PASSWORD_LEN} karakter"
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct SetPortalPasswordDto {
+    pub password: String,
+}
+
+/// `POST /api/patients/{id}/portal-password` (staf, Admin saja).
+/// Set awal SEKALIGUS reset: menimpa hash yang ada (atau NULL) dengan
+/// hash Argon2 kata sandi baru via `Db::set_portal_password`. Tidak
+/// butuh kata sandi lama — pasien baru dari registrasi belum punya
+/// kata sandi sama sekali, jadi tidak ada yang bisa diverifikasi.
+/// RBAC `ManageUsers` (hanya Admin di matriks `waras_core::rbac`;
+/// tidak ada aksi baru di core supaya core tetap sesuai kontrak
+/// "selesai kecuali bug"). Pasien tidak ditemukan -> 404; bukan Admin
+/// -> 403 (dicek sebelum keberadaan pasien, supaya tidak membocorkan
+/// mana RM yang ada). Dicatat ke audit (`portal.password_set`).
+/// Tidak ada lockout brute-force di sini: tidak ada rahasia yang
+/// ditebak — endpoint sudah di balik auth staf + RBAC Admin; token
+/// yang tidak sah ditolak extractor `AuthUser` (401) sebelum DB
+/// disentuh. Lihat `docs/FASE-A-FOLLOWUP.md` §1 untuk alasan tidak
+/// memakai jalur self-service NIK + tanggal lahir.
+pub async fn set_portal_password_staff(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<String>,
+    JsonBody(body): JsonBody<SetPortalPasswordDto>,
+) -> ApiResult<Json<Value>> {
+    require(&user, Action::ManageUsers)?;
+    valid_new_password(&body.password)?;
+    state
+        .db
+        .get_patient(&id)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("pasien {id} tidak ditemukan")))?;
+    state.db.set_portal_password(&id, &body.password).await?;
+    let _ = state
+        .db
+        .log_audit(
+            &user.name,
+            "portal.password_set",
+            "patient",
+            &id,
+            json!({"via": "admin"}),
+        )
+        .await;
+    Ok(Json(json!({ "status": "ok", "patient_id": id })))
+}
+
+#[derive(Deserialize)]
+pub struct ChangePortalPasswordDto {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+/// `POST /api/portal/change-password` (pasien, token portal).
+/// Ganti kata sandi sendiri: wajib kata sandi lama (verifikasi Argon2
+/// terhadap hash tersimpan). Pasien yang hash-nya masih NULL (belum
+/// pernah di-set staf) selalu 401 di sini — jalur mereka adalah set
+/// staf, bukan ganti. Brute-force sama seperti login portal: 5 kata
+/// sandi lama salah dalam 15 menit untuk pasangan IP + pasien yang
+/// sama -> 429 + `Retry-After` (kunci `portal-change:<ip>:<id>`,
+/// terpisah dari kunci login supaya percobaan ganti tidak mengunci
+/// login dan sebaliknya); satu ganti sukses menghapus hitungan ganti
+/// dan hitungan login portal IP + NIK yang sama, karena pasien baru
+/// saja membuktikan ia tahu kata sandinya. Dicatat ke audit
+/// (`portal.password_changed`).
+pub async fn change_portal_password(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    PortalPatient(patient): PortalPatient,
+    JsonBody(body): JsonBody<ChangePortalPasswordDto>,
+) -> ApiResult<Response> {
+    if body.current_password.is_empty() {
+        return Err(ApiError::validation("kata sandi lama wajib diisi"));
+    }
+    valid_new_password(&body.new_password)?;
+    let attempt_key = format!("portal-change:{ip}:{}", patient.id);
+    if let Some(retry) = state.db.check_login_lockout(&attempt_key).await? {
+        return Ok(ApiError::rate_limited_response(
+            retry as u64,
+            "terlalu banyak percobaan ganti kata sandi, coba lagi nanti",
+        ));
+    }
+    let ok = match state.db.get_portal_password_hash(&patient.id).await? {
+        Some(hash) => Db::verify_password(&hash, &body.current_password),
+        // Pasien tanpa kata sandi portal tidak bisa ganti — jalurnya
+        // set staf.
+        None => false,
+    };
+    if !ok {
+        if let Some(retry) = state.db.record_login_failure(&attempt_key).await? {
+            return Ok(ApiError::rate_limited_response(
+                retry as u64,
+                "terlalu banyak percobaan ganti kata sandi, coba lagi nanti",
+            ));
+        }
+        return Err(ApiError::unauthorized());
+    }
+    state
+        .db
+        .set_portal_password(&patient.id, &body.new_password)
+        .await?;
+    let _ = state.db.clear_login_attempts(&attempt_key).await;
+    let _ = state
+        .db
+        .clear_login_attempts(&format!("patient:{ip}:{}", patient.nik))
+        .await;
+    let _ = state
+        .db
+        .log_audit(
+            &patient.name,
+            "portal.password_changed",
+            "patient",
+            &patient.id,
+            json!({"via": "portal"}),
+        )
+        .await;
+    Ok((StatusCode::OK, Json(json!({ "status": "ok" }))).into_response())
 }
 
 /// `GET /api/portal/me` — data pasien pemilik token (NIK tersensor).
@@ -292,7 +430,17 @@ mod tests {
         assert!(db.seed_if_empty().await.expect("seed"), "seed harus jalan");
         let db = Arc::new(db);
         Router::new()
+            .route("/api/auth/login", post(crate::handlers::login))
+            .route(
+                "/api/patients",
+                post(crate::handlers::create_patient),
+            )
+            .route(
+                "/api/patients/{id}/portal-password",
+                post(set_portal_password_staff),
+            )
             .route("/api/auth/patient-login", post(patient_login))
+            .route("/api/portal/change-password", post(change_portal_password))
             .route("/api/portal/me", get(portal_me))
             .route("/api/portal/appointments", get(portal_appointments))
             .route("/api/portal/queue", get(portal_queue))
@@ -335,6 +483,234 @@ mod tests {
         let (status, body) = call(app.clone(), login_req("3374011503900002", "waras123")).await;
         assert_eq!(status, StatusCode::OK, "login Budi harus OK: {body}");
         body["token"].as_str().expect("token").to_string()
+    }
+
+    /// Login staf (`waras123`) -> token staf.
+    async fn login_staff(app: &Router, username: &str) -> String {
+        let (status, body) = call(
+            app.clone(),
+            Request::builder()
+                .method("POST")
+                .uri("/api/auth/login")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "username": username, "password": "waras123" }).to_string(),
+                ))
+                .expect("request login staf"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "login staf {username} harus OK: {body}");
+        body["token"].as_str().expect("token").to_string()
+    }
+
+    /// Daftarkan pasien baru lewat API (hash portal NULL — celah yang
+    /// ditutup item ini). Mengembalikan id RM baru.
+    async fn register_patient(app: &Router, admin_token: &str) -> String {
+        let (status, body) = call(
+            app.clone(),
+            Request::builder()
+                .method("POST")
+                .uri("/api/patients")
+                .header("authorization", format!("Bearer {admin_token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "nik": "3374010101900001",
+                        "name": "Pasien Baru Tes",
+                        "birth_date": "1990-01-01",
+                        "gender": "L",
+                        "address": "Jl. Tes 1, Semarang",
+                        "phone": null,
+                        "blood_type": "O+",
+                        "bpjs_number": null,
+                        "insurance": "Umum",
+                    })
+                    .to_string(),
+                ))
+                .expect("request registrasi"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "registrasi harus 201: {body}");
+        body["id"].as_str().expect("id RM").to_string()
+    }
+
+    fn set_password_req(
+        token: Option<&str>,
+        patient_id: &str,
+        password: &str,
+    ) -> Request<Body> {
+        let mut b = Request::builder()
+            .method("POST")
+            .uri(format!("/api/patients/{patient_id}/portal-password"))
+            .header("content-type", "application/json");
+        if let Some(t) = token {
+            b = b.header("authorization", format!("Bearer {t}"));
+        }
+        b.body(Body::from(json!({ "password": password }).to_string()))
+            .expect("request set password")
+    }
+
+    fn change_password_req(
+        token: Option<&str>,
+        current: &str,
+        new: &str,
+    ) -> Request<Body> {
+        let mut b = Request::builder()
+            .method("POST")
+            .uri("/api/portal/change-password")
+            .header("content-type", "application/json");
+        if let Some(t) = token {
+            b = b.header("authorization", format!("Bearer {t}"));
+        }
+        b.body(Body::from(
+            json!({ "current_password": current, "new_password": new }).to_string(),
+        ))
+        .expect("request ganti password")
+    }
+
+    #[tokio::test]
+    async fn pasien_baru_dari_registrasi_bisa_login_setelah_set_staf() {
+        let app = portal_app().await;
+        let admin = login_staff(&app, "admin").await;
+        let rm = register_patient(&app, &admin).await;
+        // Pasien baru: hash NULL -> login portal 401.
+        let (status, _) = call(
+            app.clone(),
+            login_req("3374010101900001", "apaaja123"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "pasien baru tanpa kata sandi tidak boleh login");
+        // Admin set kata sandi awal -> 200.
+        let (status, body) = call(app.clone(), set_password_req(Some(&admin), &rm, "barupass1")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["patient_id"], rm);
+        // Login portal dengan kata sandi baru -> 200 + /me jalan.
+        let (status, body) = call(app.clone(), login_req("3374010101900001", "barupass1")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let token = body["token"].as_str().expect("token").to_string();
+        let (status, body) = call(
+            app,
+            Request::builder()
+                .method("GET")
+                .uri("/api/portal/me")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .expect("request me"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["id"], rm);
+    }
+
+    #[tokio::test]
+    async fn staff_set_tanpa_token_401_bukan_admin_403_tidak_ada_404_kata_sandi_pendek_400() {
+        let app = portal_app().await;
+        // Tanpa token -> 401 (extractor AuthUser).
+        let (status, _) = call(app.clone(), set_password_req(None, "RM-000813", "barupass1")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        // Dokter (bukan Admin) -> 403.
+        let dokter = login_staff(&app, "ahmad").await;
+        let (status, body) = call(app.clone(), set_password_req(Some(&dokter), "RM-000813", "barupass1")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+        assert_eq!(body["error"]["code"], "FORBIDDEN");
+        // Admin, pasien tidak ada -> 404.
+        let admin = login_staff(&app, "admin").await;
+        let (status, body) = call(app.clone(), set_password_req(Some(&admin), "RM-999999", "barupass1")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        // Admin, kata sandi < 8 karakter -> 400.
+        let (status, body) = call(app.clone(), set_password_req(Some(&admin), "RM-000813", "pendek")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "VALIDATION");
+        // Token pasien (bukan staf) -> 401, bukan 403.
+        let budi = login_budi(&app).await;
+        let (status, _) = call(app, set_password_req(Some(&budi), "RM-000813", "barupass1")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn staff_set_mereset_kata_sandi_lama() {
+        let app = portal_app().await;
+        let admin = login_staff(&app, "admin").await;
+        let (status, _) = call(app.clone(), set_password_req(Some(&admin), "RM-000813", "resetpass1")).await;
+        assert_eq!(status, StatusCode::OK);
+        // Kata sandi lama tidak lagi berlaku, yang baru berlaku.
+        let (status, _) = call(app.clone(), login_req("3374011503900002", "waras123")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "kata sandi lama harus mati setelah reset");
+        let (status, _) = call(app, login_req("3374011503900002", "resetpass1")).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn portal_change_ganti_kata_sandi_lalu_login_baru_jalan_lama_mati() {
+        let app = portal_app().await;
+        let token = login_budi(&app).await;
+        let (status, body) = call(
+            app.clone(),
+            change_password_req(Some(&token), "waras123", "gantipass1"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["status"], "ok");
+        let (status, _) = call(app.clone(), login_req("3374011503900002", "waras123")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "kata sandi lama harus mati setelah ganti");
+        let (status, _) = call(app, login_req("3374011503900002", "gantipass1")).await;
+        assert_eq!(status, StatusCode::OK, "kata sandi baru harus bisa login");
+    }
+
+    #[tokio::test]
+    async fn portal_change_tanpa_token_401_kata_sandi_lama_salah_401_baru_pendek_400() {
+        let app = portal_app().await;
+        // Tanpa token -> 401.
+        let (status, _) = call(app.clone(), change_password_req(None, "waras123", "gantipass1")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let token = login_budi(&app).await;
+        // Kata sandi lama salah -> 401 generik.
+        let (status, body) = call(
+            app.clone(),
+            change_password_req(Some(&token), "salah123", "gantipass1"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        // Kata sandi baru < 8 karakter -> 400 (tidak menghabiskan
+        // hitungan lockout: validasi jalan sebelum verifikasi).
+        let (status, body) = call(
+            app.clone(),
+            change_password_req(Some(&token), "waras123", "pendek"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        // Kata sandi lama tetap berlaku setelah dua penolakan itu.
+        let (status, _) = call(app, login_req("3374011503900002", "waras123")).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn portal_change_lima_gagal_mengunci_429() {
+        let app = portal_app().await;
+        let token = login_budi(&app).await;
+        // 4 gagal pertama -> 401; ke-5 -> 429.
+        for i in 1..5 {
+            let (status, _) = call(
+                app.clone(),
+                change_password_req(Some(&token), "salah123", "gantipass1"),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "gagal ke-{i}");
+        }
+        let (status, body) = call(
+            app.clone(),
+            change_password_req(Some(&token), "salah123", "gantipass1"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+        assert_eq!(body["error"]["code"], "RATE_LIMITED");
+        // Kata sandi lama yang benar pun ditolak selama terkunci.
+        let (status, _) = call(
+            app,
+            change_password_req(Some(&token), "waras123", "gantipass1"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]
