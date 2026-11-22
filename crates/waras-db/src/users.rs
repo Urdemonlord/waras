@@ -12,6 +12,10 @@ use waras_core::{
 
 impl Db {
     /// Buat user baru. ID `U-###` berikutnya; password di-hash Argon2.
+    /// `create_user_once` memegang `Db::alloc_lock` selama hitung-max +
+    /// INSERT; retry maks 5x di sini hanya jaring pengaman untuk
+    /// tabrakan antar proses. Hash Argon2 dihitung di luar kunci supaya
+    /// seksi kritis tetap pendek (retry tidak mengulang hash).
     pub async fn create_user(
         &self,
         nip: &str,
@@ -20,13 +24,43 @@ impl Db {
         role: waras_core::types::Role,
         password: &str,
     ) -> Result<User, WarasError> {
+        let hash = Self::hash_password(password)?;
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_user_once(nip, username, name, role, &hash)
+                .await
+            {
+                Ok(u) => return Ok(u),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id user".into())))
+    }
+
+    async fn create_user_once(
+        &self,
+        nip: &str,
+        username: &str,
+        name: &str,
+        role: waras_core::types::Role,
+        hash: &str,
+    ) -> Result<User, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> =
             sqlx::query_scalar("SELECT id FROM users")
                 .fetch_all(&self.pool)
                 .await
                 .map_err(db_err)?;
         let id = format!("U-{:03}", crate::next_seq_from_ids(&ids, 1));
-        let hash = Self::hash_password(password)?;
         let created = fmt_dt(now_naive());
         sqlx::query(
             "INSERT INTO users (id, nip, username, name, role, active, password_hash, created_at)
@@ -37,7 +71,7 @@ impl Db {
         .bind(username)
         .bind(name)
         .bind(role_to_str(role))
-        .bind(&hash)
+        .bind(hash)
         .bind(&created)
         .execute(&self.pool)
         .await

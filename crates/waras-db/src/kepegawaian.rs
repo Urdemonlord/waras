@@ -18,7 +18,9 @@ impl Db {
         rows.into_iter().map(|r| r.into_domain()).collect()
     }
 
-    /// Staf baru: id `STF-<seq>`, aktif.
+    /// Staf baru: id `STF-<seq>`, aktif. `create_staff_once` memegang
+    /// `Db::alloc_lock` selama hitung-max + INSERT; retry maks 5x di sini
+    /// hanya jaring pengaman untuk tabrakan antar proses.
     pub async fn create_staff(
         &self,
         name: &str,
@@ -27,6 +29,36 @@ impl Db {
         poli: &str,
         phone: &str,
     ) -> Result<Staff, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_staff_once(name, nip, role, poli, phone)
+                .await
+            {
+                Ok(s) => return Ok(s),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id staf".into())))
+    }
+
+    async fn create_staff_once(
+        &self,
+        name: &str,
+        nip: &str,
+        role: &str,
+        poli: &str,
+        phone: &str,
+    ) -> Result<Staff, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM staff")
             .fetch_all(&self.pool)
             .await
@@ -96,7 +128,12 @@ impl Db {
     }
 
     /// Shift baru: id `SHF-<tanggal klinik>-<seq>`. Gagal 422 bila staf
-    /// sudah punya shift di tanggal itu.
+    /// sudah punya shift di tanggal itu. `create_shift_once` memegang
+    /// `Db::alloc_lock` selama cek-duplikat + hitung-max + INSERT; retry
+    /// maks 5x di sini hanya jaring pengaman untuk tabrakan antar proses.
+    /// Efek samping: kunci juga menyeragamkan cek-duplikat dalam satu
+    /// proses, jadi dua shift bersamaan untuk staf + tanggal yang sama
+    /// tidak bisa lolos bersama.
     pub async fn create_shift(
         &self,
         staff_id: &str,
@@ -104,6 +141,35 @@ impl Db {
         shift: &str,
         poli: &str,
     ) -> Result<ShiftSchedule, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_shift_once(staff_id, date, shift, poli)
+                .await
+            {
+                Ok(s) => return Ok(s),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id shift".into())))
+    }
+
+    async fn create_shift_once(
+        &self,
+        staff_id: &str,
+        date: &str,
+        shift: &str,
+        poli: &str,
+    ) -> Result<ShiftSchedule, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): cek-duplikat + hitung-max +
+        // INSERT harus atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let n: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM shift_schedules WHERE staff_id = ? AND date = ?",
         )

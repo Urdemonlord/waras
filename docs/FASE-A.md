@@ -53,9 +53,11 @@ Detail + runbook: `docs/BACKUP.md`.
 - Latihan restore 21 Nov 2026: backup saat server jalan, DB dihapus,
   restore satu perintah, reboot, login seed jalan — sebelum/sesudah
   identik (patients 15, queue 45, resep 9, audit 10), **zero data loss**.
-- Catatan: unit systemd memakai placeholder path (`/opt/waras`,
-  `/var/backups/waras`, user `waras`) — cocokan dengan layout VPS
-  sebelum timer diaktifkan. Salinan backup off-server adalah kerja
+- Catatan: unit systemd sudah dicocokkan dengan layout VPS dan timer
+  sudah aktif di VPS (follow-up Fase A item 2, lihat
+  `docs/FASE-A-FOLLOWUP.md` item 2; file unit di repo
+  `scripts/waras-backup.service` / `scripts/waras-backup.timer`
+  mengikuti unit terpasang). Salinan backup off-server adalah kerja
   Fase C, bukan A3. Untuk Postgres, backup yang benar adalah `pg_dump`
   (didokumentasikan di runbook).
 
@@ -122,10 +124,13 @@ Detail: `docs/FASE-A-A4.md`.
   `docs/FASE-A-FOLLOWUP.md` item 1 (branch `fase-a-followup`):
   `POST /api/patients/{id}/portal-password` (Admin) +
   `POST /api/portal/change-password` (pasien, kata sandi lama wajib).
-- Race read-max-then-insert masih ada di jalur alokasi ID lain (pasien
-  RM-######, encounter, invoice, klaim, admisi, order lab/radiologi,
-  operasi, persalinan, HD, transfusi, staf, shift, kunci API) — baru
-  antrean/resep/outbox yang dikunci `alloc_lock`; belum di-load-test.
+- Race read-max-then-insert di jalur alokasi ID lain, SELESAI di
+  `docs/FASE-A-FOLLOWUP.md` item 3 (branch `fase-a-followup`): 29 fungsi
+  (pasien, encounter, invoice, klaim, admisi, order lab/radiologi,
+  operasi, persalinan, HD, transfusi, staf, shift, kunci API, SEP,
+  rujukan, PCare, dan lainnya) dikunci `alloc_lock` + retry 5x dengan
+  pola yang sama seperti antrean/resep/outbox; uji konkurensi baru 5/5
+  dan uji beban HTTP 1000/1000 lolos.
 - `persistent=false` di mode PG = satu Parse round-trip per query;
   biayanya belum diukur terpisah.
 - CSP per halaman, HSTS (di nginx, bukan aplikasi), audit XSS penuh,

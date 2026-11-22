@@ -56,7 +56,30 @@ impl Db {
     }
 
     /// Pasien baru dengan nomor RM berikutnya (`RM-######`).
+    /// `create_patient_once` memegang `Db::alloc_lock` selama hitung-max
+    /// + INSERT; retry maks 5x di sini hanya jaring pengaman untuk
+    /// tabrakan antar proses.
     pub async fn create_patient(&self, input: NewPatient) -> Result<Patient, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self.create_patient_once(input.clone()).await {
+                Ok(p) => return Ok(p),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi nomor RM".into())))
+    }
+
+    async fn create_patient_once(&self, input: NewPatient) -> Result<Patient, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM patients")
             .fetch_all(&self.pool)
             .await

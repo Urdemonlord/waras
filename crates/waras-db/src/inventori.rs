@@ -32,9 +32,40 @@ impl Db {
         row.map(|r| r.into_domain()).transpose()
     }
 
-    /// Item baru: id `INV-ITM-<seq>`.
+    /// Item baru: id `INV-ITM-<seq>`. `create_inventory_item_once`
+    /// memegang `Db::alloc_lock` selama hitung-max + INSERT; retry maks
+    /// 5x di sini hanya jaring pengaman untuk tabrakan antar proses.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_inventory_item(
+        &self,
+        name: &str,
+        category: &str,
+        unit: &str,
+        stock: i64,
+        min_stock: i64,
+        location: &str,
+        expiry: &str,
+    ) -> Result<InventoryItem, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_inventory_item_once(name, category, unit, stock, min_stock, location, expiry)
+                .await
+            {
+                Ok(i) => return Ok(i),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id item inventori".into())))
+    }
+
+    async fn create_inventory_item_once(
         &self,
         name: &str,
         category: &str,
@@ -49,6 +80,9 @@ impl Db {
                 "stok awal tidak boleh negatif".into(),
             ));
         }
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM inventory_items")
             .fetch_all(&self.pool)
             .await
@@ -105,7 +139,40 @@ impl Db {
     }
 
     /// Mutasi stok: id `INM-<seq>`. Keluar gagal 422 bila stok tidak cukup.
+    /// `add_inventory_move_once` memegang `Db::alloc_lock` selama
+    /// cek-stok + hitung-max + INSERT + update stok + commit; retry maks
+    /// 5x di sini hanya jaring pengaman untuk tabrakan antar proses.
+    /// Efek samping: kunci juga menyeragamkan cek-stok dalam satu proses,
+    /// jadi dua mutasi Keluar bersamaan tidak bisa menghabiskan stok yang
+    /// sama dua kali.
     pub async fn add_inventory_move(
+        &self,
+        item_id: &str,
+        kind: &str,
+        qty: i64,
+        note: &str,
+        by_name: &str,
+    ) -> Result<InventoryMove, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .add_inventory_move_once(item_id, kind, qty, note, by_name)
+                .await
+            {
+                Ok(m) => return Ok(m),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id mutasi inventori".into())))
+    }
+
+    async fn add_inventory_move_once(
         &self,
         item_id: &str,
         kind: &str,
@@ -128,6 +195,10 @@ impl Db {
                 "jumlah mutasi Masuk/Keluar harus lebih dari 0".into(),
             ));
         }
+        // Kunci alokasi (lihat Db::alloc_lock) SEBELUM transaksi dibuka:
+        // cek-stok + hitung-max + INSERT + update stok harus atomik antar
+        // task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let item: Option<InventoryItemRow> =
             sqlx::query_as("SELECT * FROM inventory_items WHERE id = ? LIMIT 1")

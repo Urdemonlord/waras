@@ -15,6 +15,9 @@ impl Db {
     /// Buat kunci API baru. ID `AK-######` berikutnya. `scopes` sudah
     /// dalam bentuk dipisah koma (divalidasi handler sebelum memanggil).
     /// Pemanggil menyimpan HANYA prefix + hash, bukan kunci penuh.
+    /// `create_api_key_once` memegang `Db::alloc_lock` selama hitung-max
+    /// + INSERT; retry maks 5x di sini hanya jaring pengaman untuk
+    /// tabrakan antar proses.
     pub async fn create_api_key(
         &self,
         name: &str,
@@ -23,6 +26,36 @@ impl Db {
         scopes: &str,
         created_by: &str,
     ) -> Result<ApiKey, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_api_key_once(name, key_prefix, key_hash, scopes, created_by)
+                .await
+            {
+                Ok(k) => return Ok(k),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id kunci API".into())))
+    }
+
+    async fn create_api_key_once(
+        &self,
+        name: &str,
+        key_prefix: &str,
+        key_hash: &str,
+        scopes: &str,
+        created_by: &str,
+    ) -> Result<ApiKey, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM api_keys")
             .fetch_all(&self.pool)
             .await

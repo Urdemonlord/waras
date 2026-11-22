@@ -45,8 +45,50 @@ impl Db {
     }
 
     /// Asesmen baru: id `GZ-<seq>`, BMI + kategori dihitung server.
+    /// `create_nutrition_assessment_once` memegang `Db::alloc_lock`
+    /// selama hitung-max + INSERT; retry maks 5x di sini hanya jaring
+    /// pengaman untuk tabrakan antar proses.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_nutrition_assessment(
+        &self,
+        patient_id: &str,
+        encounter_id: Option<&str>,
+        weight_kg: f64,
+        height_cm: f64,
+        risk: &str,
+        diet: &str,
+        notes: &str,
+        assessed_by: &str,
+    ) -> Result<NutritionAssessment, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_nutrition_assessment_once(
+                    patient_id,
+                    encounter_id,
+                    weight_kg,
+                    height_cm,
+                    risk,
+                    diet,
+                    notes,
+                    assessed_by,
+                )
+                .await
+            {
+                Ok(a) => return Ok(a),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id asesmen gizi".into())))
+    }
+
+    async fn create_nutrition_assessment_once(
         &self,
         patient_id: &str,
         encounter_id: Option<&str>,
@@ -69,6 +111,9 @@ impl Db {
         }
         let bmi_value = round1(bmi(weight_kg, height_cm));
         let category = bmi_category(bmi_value);
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM nutrition_assessments")
             .fetch_all(&self.pool)
             .await
@@ -136,6 +181,9 @@ impl Db {
     }
 
     /// Diet baru: id `DT-<seq>`, status Aktif.
+    /// `create_nutrition_diet_once` memegang `Db::alloc_lock` selama
+    /// hitung-max + INSERT; retry maks 5x di sini hanya jaring pengaman
+    /// untuk tabrakan antar proses.
     pub async fn create_nutrition_diet(
         &self,
         patient_id: &str,
@@ -144,6 +192,36 @@ impl Db {
         notes: &str,
         start_date: &str,
     ) -> Result<NutritionDiet, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_nutrition_diet_once(patient_id, diet_type, calories, notes, start_date)
+                .await
+            {
+                Ok(d) => return Ok(d),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id diet".into())))
+    }
+
+    async fn create_nutrition_diet_once(
+        &self,
+        patient_id: &str,
+        diet_type: &str,
+        calories: i64,
+        notes: &str,
+        start_date: &str,
+    ) -> Result<NutritionDiet, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM nutrition_diets")
             .fetch_all(&self.pool)
             .await

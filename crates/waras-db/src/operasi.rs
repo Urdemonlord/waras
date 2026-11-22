@@ -34,7 +34,50 @@ impl Db {
         row.map(|r| r.into_domain()).transpose()
     }
 
+    /// Jadwal operasi baru: id `OK-<tanggal klinik>-<seq>`, status
+    /// Terjadwal. `create_surgery_once` memegang `Db::alloc_lock`
+    /// selama hitung-max + INSERT; retry maks 5x di sini hanya jaring
+    /// pengaman untuk tabrakan antar proses.
     pub async fn create_surgery(
+        &self,
+        patient_id: &str,
+        encounter_id: Option<&str>,
+        room: &str,
+        procedure: &str,
+        procedure_code: &str,
+        operator: &str,
+        team: &str,
+        scheduled_at: &str,
+    ) -> Result<Surgery, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_surgery_once(
+                    patient_id,
+                    encounter_id,
+                    room,
+                    procedure,
+                    procedure_code,
+                    operator,
+                    team,
+                    scheduled_at,
+                )
+                .await
+            {
+                Ok(s) => return Ok(s),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id operasi".into())))
+    }
+
+    async fn create_surgery_once(
         &self,
         patient_id: &str,
         encounter_id: Option<&str>,
@@ -51,6 +94,9 @@ impl Db {
             .map_err(|_| {
                 WarasError::Validation(format!("jadwal tidak valid: {scheduled_at}"))
             })?;
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let today = clinic_today();
         let date_part = today.format("%Y%m%d").to_string();
         let prefix = format!("OK-{date_part}-");
@@ -132,7 +178,12 @@ impl Db {
     }
 
     /// Persalinan baru: gagal (422) bila ruang bukan Kosong; ruang jadi
-    /// Terisi dalam transaksi yang sama.
+    /// Terisi dalam transaksi yang sama. `create_delivery_once` memegang
+    /// `Db::alloc_lock` selama cek-ruang + hitung-max + INSERT + update
+    /// ruang + commit; retry maks 5x di sini hanya jaring pengaman
+    /// untuk tabrakan antar proses. Efek samping: kunci juga
+    /// menyeragamkan cek-ruang dalam satu proses, jadi dua persalinan
+    /// bersamaan ke ruang yang sama tidak bisa lolos bersama.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_delivery(
         &self,
@@ -146,6 +197,51 @@ impl Db {
         plan: &str,
         room: &str,
     ) -> Result<Delivery, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_delivery_once(
+                    patient_id,
+                    age_years,
+                    gravida_para,
+                    dilation_cm,
+                    fetal_heart_rate,
+                    midwife,
+                    doctor,
+                    plan,
+                    room,
+                )
+                .await
+            {
+                Ok(d) => return Ok(d),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id persalinan".into())))
+    }
+
+    async fn create_delivery_once(
+        &self,
+        patient_id: &str,
+        age_years: i64,
+        gravida_para: &str,
+        dilation_cm: i64,
+        fetal_heart_rate: i64,
+        midwife: &str,
+        doctor: &str,
+        plan: &str,
+        room: &str,
+    ) -> Result<Delivery, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock) SEBELUM transaksi dibuka:
+        // cek-ruang + hitung-max + INSERT + update ruang harus atomik
+        // antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let room_row: Option<DeliveryRoomRow> =
             sqlx::query_as("SELECT * FROM delivery_rooms WHERE id = ? LIMIT 1")

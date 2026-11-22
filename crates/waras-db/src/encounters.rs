@@ -16,7 +16,9 @@ use waras_core::{
 
 impl Db {
     /// Encounter baru `ENC-<tanggal>-<seq>` (seq = maks hari itu + 1),
-    /// status Aktif, tanggal = hari klinik.
+    /// status Aktif, tanggal = hari klinik. `create_encounter_once`
+    /// memegang `Db::alloc_lock` selama hitung-max + INSERT; retry maks
+    /// 5x di sini hanya jaring pengaman untuk tabrakan antar proses.
     pub async fn create_encounter(
         &self,
         patient_id: &str,
@@ -24,6 +26,35 @@ impl Db {
         doctor_name: &str,
         doctor_id: Option<&str>,
     ) -> Result<Encounter, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_encounter_once(patient_id, poli, doctor_name, doctor_id)
+                .await
+            {
+                Ok(e) => return Ok(e),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id encounter".into())))
+    }
+
+    async fn create_encounter_once(
+        &self,
+        patient_id: &str,
+        poli: &str,
+        doctor_name: &str,
+        doctor_id: Option<&str>,
+    ) -> Result<Encounter, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let today = clinic_today();
         let ids_today: Vec<String> = sqlx::query_scalar(
             "SELECT id FROM encounters WHERE date = ?",

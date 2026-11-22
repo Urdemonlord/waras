@@ -42,9 +42,50 @@ impl Db {
     }
 
     /// Rekam gigi baru: id `GG-<seq>`, status awal Selesai (default DDL).
-    /// Nomor gigi bukan FDI → 400.
+    /// Nomor gigi bukan FDI → 400. `create_dental_record_once` memegang
+    /// `Db::alloc_lock` selama hitung-max + INSERT; retry maks 5x di sini
+    /// hanya jaring pengaman untuk tabrakan antar proses.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_dental_record(
+        &self,
+        patient_id: &str,
+        encounter_id: Option<&str>,
+        tooth_number: &str,
+        diagnosis: &str,
+        diagnosis_code: &str,
+        treatment: &str,
+        treatment_code: &str,
+        dentist: &str,
+    ) -> Result<DentalRecord, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_dental_record_once(
+                    patient_id,
+                    encounter_id,
+                    tooth_number,
+                    diagnosis,
+                    diagnosis_code,
+                    treatment,
+                    treatment_code,
+                    dentist,
+                )
+                .await
+            {
+                Ok(r) => return Ok(r),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id rekam gigi".into())))
+    }
+
+    async fn create_dental_record_once(
         &self,
         patient_id: &str,
         encounter_id: Option<&str>,
@@ -60,6 +101,9 @@ impl Db {
                 "nomor gigi {tooth_number} bukan notasi FDI (11–48)"
             )));
         }
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM dental_records")
             .fetch_all(&self.pool)
             .await

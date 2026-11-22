@@ -32,6 +32,9 @@ impl Db {
     }
 
     /// Triase baru: id `IGD-<tanggal klinik>-<seq>`, status Menunggu.
+    /// `create_igd_triage_once` memegang `Db::alloc_lock` selama
+    /// hitung-max + INSERT; retry maks 5x di sini hanya jaring pengaman
+    /// untuk tabrakan antar proses.
     pub async fn create_igd_triage(
         &self,
         patient_id: &str,
@@ -41,6 +44,37 @@ impl Db {
         arrived_at: &str,
         encounter_id: Option<&str>,
     ) -> Result<IgdVisit, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_igd_triage_once(patient_id, complaint, triage, doctor, arrived_at, encounter_id)
+                .await
+            {
+                Ok(v) => return Ok(v),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id kunjungan IGD".into())))
+    }
+
+    async fn create_igd_triage_once(
+        &self,
+        patient_id: &str,
+        complaint: &str,
+        triage: TriageLevel,
+        doctor: &str,
+        arrived_at: &str,
+        encounter_id: Option<&str>,
+    ) -> Result<IgdVisit, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let today = clinic_today();
         let date_part = today.format("%Y%m%d").to_string();
         let prefix = format!("IGD-{date_part}-");
@@ -86,12 +120,40 @@ impl Db {
         Ok(())
     }
 
+    /// Observasi IGD baru: id `IGO-<seq>`. `add_igd_observation_once`
+    /// memegang `Db::alloc_lock` selama hitung-max + INSERT; retry maks
+    /// 5x di sini hanya jaring pengaman untuk tabrakan antar proses.
     pub async fn add_igd_observation(
         &self,
         igd_id: &str,
         note: &str,
         by: &str,
     ) -> Result<IgdObservation, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self.add_igd_observation_once(igd_id, note, by).await {
+                Ok(o) => return Ok(o),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id observasi IGD".into())))
+    }
+
+    async fn add_igd_observation_once(
+        &self,
+        igd_id: &str,
+        note: &str,
+        by: &str,
+    ) -> Result<IgdObservation, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM igd_observations")
             .fetch_all(&self.pool)
             .await

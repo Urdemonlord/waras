@@ -139,8 +139,32 @@ impl Db {
     }
 
     /// Buat berkas klaim. Bila `c.id` kosong, isi `CLM-20261119-###`
-    /// (tanggal klinik hari ini).
+    /// (tanggal klinik hari ini). `create_claim_once` memegang
+    /// `Db::alloc_lock` selama hitung-max + INSERT; retry maks 5x di
+    /// sini hanya jaring pengaman untuk tabrakan antar proses (untuk id
+    /// yang dihitung; bila id diisi pemanggil dan sudah ada, retry
+    /// gagal dengan pelanggaran yang sama).
     pub async fn create_claim(&self, c: &Claim) -> Result<Claim, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self.create_claim_once(c).await {
+                Ok(c) => return Ok(c),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id klaim".into())))
+    }
+
+    async fn create_claim_once(&self, c: &Claim) -> Result<Claim, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let id = if c.id.trim().is_empty() {
             let date_part = clinic_today().format("%Y%m%d").to_string();
             let prefix = format!("CLM-{date_part}-");
@@ -155,12 +179,22 @@ impl Db {
         } else {
             c.id.clone()
         };
+        let mut claim = c.clone();
+        claim.id = id;
+        self.insert_claim(&claim).await
+    }
+
+    /// INSERT satu klaim + baca ulang. Pemanggil HARUS sudah memegang
+    /// `Db::alloc_lock` (dipakai `create_claim_once` dan
+    /// `group_claim_for_encounter`, supaya grouping tidak mengunci dua
+    /// kali).
+    pub(crate) async fn insert_claim(&self, c: &Claim) -> Result<Claim, WarasError> {
         sqlx::query(
             "INSERT INTO claims (id, invoice_id, patient_id, sep_id, ina_cbg_code, amount,
                  status, submitted_at, created_at, grouping_note)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
-        .bind(&id)
+        .bind(&c.id)
         .bind(&c.invoice_id)
         .bind(&c.patient_id)
         .bind(&c.sep_id)
@@ -173,7 +207,7 @@ impl Db {
         .execute(&self.pool)
         .await
         .map_err(db_err)?;
-        self.get_claim(&id)
+        self.get_claim(&c.id)
             .await?
             .ok_or_else(|| WarasError::Database("klaim baru tidak ditemukan".into()))
     }

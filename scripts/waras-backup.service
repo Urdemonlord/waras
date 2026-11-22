@@ -1,7 +1,18 @@
 # waras-backup.service — backup harian SQLite WARAS (pasangan dari
-# waras-backup.timer). Dijalankan sebagai user `waras`; sesuaikan
-# WorkingDirectory / WARAS_DB / WARAS_BACKUP_DIR dengan instalasi Anda
-# (lihat docs/BACKUP.md § Instalasi).
+# waras-backup.timer).
+#
+# Layout ini mengikuti instalasi VPS live (22 Nov 2026, follow-up Fase A
+# item 2): user `meowlabs`, DB di /home/meowlabs/waras-data/waras.db,
+# backup di /home/meowlabs/waras-backups. Skrip tinggal di
+# /home/meowlabs/waras-scripts/, BUKAN di dalam direktori rilis, karena
+# rilis hanya berisi binary (tanpa scripts/); menunjuk unit ke path rilis
+# akan rusak saat deploy berikutnya. Bila skrip berubah di repo, salin
+# ulang ke /home/meowlabs/waras-scripts/ (atau ajari pipeline deploy
+# untuk ikut mengirim scripts/).
+#
+# Catatan zona waktu: jam server VPS adalah CST, jadi OnCalendar 02:30 di
+# timer berarti 02:30 CST = 01:30 WIB. Bila maunya 02:30 WIB, ubah
+# OnCalendar di timer jadi 01:30 atau ubah TZ server.
 #
 # Instalasi:
 #   sudo cp scripts/waras-backup.service scripts/waras-backup.timer /etc/systemd/system/
@@ -14,17 +25,16 @@
 [Unit]
 Description=Backup harian basis data SQLite WARAS
 After=network.target
-Wants=waras-backup.timer
 
 [Service]
 Type=oneshot
-User=waras
-Group=waras
-WorkingDirectory=/opt/waras
-Environment=WARAS_DB=/opt/waras/waras.db
-Environment=WARAS_BACKUP_DIR=/var/backups/waras
+User=meowlabs
+Group=meowlabs
+WorkingDirectory=/home/meowlabs
+Environment=WARAS_DB=/home/meowlabs/waras-data/waras.db
+Environment=WARAS_BACKUP_DIR=/home/meowlabs/waras-backups
 Environment=WARAS_BACKUP_KEEP=7
-ExecStart=/opt/waras/scripts/waras-backup.sh
+ExecStart=/home/meowlabs/waras-scripts/waras-backup.sh
 # Jangan restart otomatis: backup gagal harus terlihat (timer akan
 # mencoba lagi besok + alert dari pemeriksaan log), bukan diulang
 # tanpa henti.

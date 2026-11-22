@@ -111,8 +111,48 @@ impl Db {
     }
 
     /// Permintaan baru: id `TR-<tanggal klinik>-<seq>`, status Menunggu.
+    /// `create_blood_request_once` memegang `Db::alloc_lock` selama
+    /// hitung-max + INSERT; retry maks 5x di sini hanya jaring pengaman
+    /// untuk tabrakan antar proses.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_blood_request(
+        &self,
+        patient_id: &str,
+        encounter_id: Option<&str>,
+        blood_type: &str,
+        component: &str,
+        units: i64,
+        reason: &str,
+        requested_by: &str,
+    ) -> Result<BloodRequest, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_blood_request_once(
+                    patient_id,
+                    encounter_id,
+                    blood_type,
+                    component,
+                    units,
+                    reason,
+                    requested_by,
+                )
+                .await
+            {
+                Ok(r) => return Ok(r),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id permintaan darah".into())))
+    }
+
+    async fn create_blood_request_once(
         &self,
         patient_id: &str,
         encounter_id: Option<&str>,
@@ -127,6 +167,9 @@ impl Db {
                 "jumlah kantong harus lebih dari 0".into(),
             ));
         }
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let today = clinic_today();
         let date_part = today.format("%Y%m%d").to_string();
         let prefix = format!("TR-{date_part}-");
@@ -201,7 +244,36 @@ impl Db {
 
     /// Crossmatch baru: id `XM-<seq>`. Hasil `Cocok` mengubah permintaan
     /// jadi Crossmatch; `Tidak Cocok` membiarkan status permintaan.
+    /// `add_crossmatch_once` memegang `Db::alloc_lock` selama hitung-max
+    /// + INSERT; retry maks 5x di sini hanya jaring pengaman untuk
+    /// tabrakan antar proses.
     pub async fn add_crossmatch(
+        &self,
+        request_id: &str,
+        bag_id: &str,
+        result: &str,
+        tested_by: &str,
+    ) -> Result<BloodCrossmatch, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .add_crossmatch_once(request_id, bag_id, result, tested_by)
+                .await
+            {
+                Ok(c) => return Ok(c),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id crossmatch".into())))
+    }
+
+    async fn add_crossmatch_once(
         &self,
         request_id: &str,
         bag_id: &str,
@@ -220,6 +292,10 @@ impl Db {
                 WarasError::NotFound(format!("permintaan darah {request_id} tidak ditemukan"))
             })?;
         let _ = req;
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses. Baca permintaan di atas
+        // sengaja di luar kunci supaya seksi kritis tetap pendek.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM blood_crossmatches")
             .fetch_all(&self.pool)
             .await

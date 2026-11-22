@@ -59,7 +59,12 @@ impl Db {
 
     /// Sesi baru: id `HD-<tanggal klinik>-<seq>`, status Terjadwal.
     /// Gagal 422 bila mesin bukan Siap; mesin jadi Terpakai dalam
-    /// transaksi yang sama dengan baris sesi.
+    /// transaksi yang sama dengan baris sesi. `create_hd_session_once`
+    /// memegang `Db::alloc_lock` selama cek-mesin + hitung-max + INSERT
+    /// + update mesin + commit; retry maks 5x di sini hanya jaring
+    /// pengaman untuk tabrakan antar proses. Efek samping: kunci juga
+    /// menyeragamkan cek-mesin dalam satu proses, jadi dua sesi
+    /// bersamaan ke mesin yang sama tidak bisa lolos bersama.
     #[allow(clippy::too_many_arguments)]
     pub async fn create_hd_session(
         &self,
@@ -74,6 +79,53 @@ impl Db {
         scheduled_at: &str,
         notes: &str,
     ) -> Result<HdSession, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_hd_session_once(
+                    patient_id,
+                    machine_id,
+                    encounter_id,
+                    dialyzer,
+                    duration_minutes,
+                    blood_flow,
+                    dialysate_flow,
+                    uf_goal_ml,
+                    scheduled_at,
+                    notes,
+                )
+                .await
+            {
+                Ok(s) => return Ok(s),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id sesi HD".into())))
+    }
+
+    async fn create_hd_session_once(
+        &self,
+        patient_id: &str,
+        machine_id: &str,
+        encounter_id: Option<&str>,
+        dialyzer: &str,
+        duration_minutes: i64,
+        blood_flow: i64,
+        dialysate_flow: i64,
+        uf_goal_ml: i64,
+        scheduled_at: &str,
+        notes: &str,
+    ) -> Result<HdSession, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock) SEBELUM transaksi dibuka:
+        // cek-mesin + hitung-max + INSERT + update mesin harus atomik
+        // antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let machine: Option<HdMachineRow> =
             sqlx::query_as("SELECT * FROM hd_machines WHERE id = ? LIMIT 1")

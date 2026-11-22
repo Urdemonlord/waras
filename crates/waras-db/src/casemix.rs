@@ -22,7 +22,31 @@ impl Db {
     /// ada (invoice encounter dulu, bila tidak ada invoice terbaru
     /// pasien); `grouping_note` =
     /// `"Grouping lokal (perkiraan): {diag} -> {code}"`.
+    /// `group_claim_for_encounter_once` memegang `Db::alloc_lock` selama
+    /// cek-draft + hitung-max + INSERT/UPDATE; retry maks 5x di sini
+    /// hanya jaring pengaman untuk tabrakan antar proses.
     pub async fn group_claim_for_encounter(
+        &self,
+        encounter_id: &str,
+        by: &str,
+    ) -> Result<Claim, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self.group_claim_for_encounter_once(encounter_id, by).await {
+                Ok(c) => return Ok(c),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id klaim".into())))
+    }
+
+    async fn group_claim_for_encounter_once(
         &self,
         encounter_id: &str,
         by: &str,
@@ -89,9 +113,15 @@ impl Db {
         };
         let sep_id: Option<String> = match &invoice_id {
             Some(inv) => {
+                // fetch_one (bukan fetch_optional): baris tagihan sudah
+                // pasti ada (id-nya baru dibaca), dan kolom sep_id boleh
+                // NULL. fetch_optional di sini menginfer skalar String
+                // sehingga NULL gagal decode ("expected TEXT, got
+                // Null") — bug laten yang baru ketahuan lewat uji
+                // konkurensi item 3 (tagihan baru belum punya SEP).
                 sqlx::query_scalar("SELECT sep_id FROM invoices WHERE id = ? LIMIT 1")
                     .bind(inv)
-                    .fetch_optional(&self.pool)
+                    .fetch_one(&self.pool)
                     .await
                     .map_err(db_err)?
             }
@@ -101,7 +131,15 @@ impl Db {
             "Grouping lokal (perkiraan): {diag_code} -> {}",
             group.code
         );
-        // Draft yang sudah ada untuk encounter ini (klaim → invoice → encounter).
+        // Kunci alokasi (lihat Db::alloc_lock): cek-draft + hitung-max +
+        // INSERT/UPDATE harus atomik antar task dalam satu proses, supaya
+        // dua grouping bersamaan untuk encounter yang sama tidak membuat
+        // dua klaim Draft. Baca-baca di atas sengaja di luar kunci supaya
+        // seksi kritis tetap pendek.
+        let _alloc = self.alloc_lock.lock().await;
+        // Draft yang sudah ada untuk encounter ini (klaim → invoice →
+        // encounter): dicek ulang di dalam kunci, karena grouping lain
+        // bisa membuatnya di antara baca di luar kunci dan titik ini.
         let existing: Option<String> = sqlx::query_scalar(
             "SELECT claims.id FROM claims
              JOIN invoices ON claims.invoice_id = invoices.id
@@ -159,7 +197,9 @@ impl Db {
             created_at: parse_dt(&clinic_now_string())?,
             grouping_note: Some(note),
         };
-        let claim = self.create_claim(&claim).await?;
+        // insert_claim (bukan create_claim): kunci sudah dipegang di sini,
+        // dan create_claim akan mengunci lagi (deadlock).
+        let claim = self.insert_claim(&claim).await?;
         self.log_audit(
             by,
             "casemix.group",

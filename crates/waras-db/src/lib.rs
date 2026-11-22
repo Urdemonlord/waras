@@ -18,6 +18,7 @@
 //! SQLx dipakai lewat `sqlx::query` / `query_as` + `FromRow` saja.
 //! Tidak ada macro `query!`/`query_as!` (butuh DB saat compile).
 
+mod alloc_concurrency;
 mod api_keys;
 mod audit;
 mod casemix;
@@ -283,6 +284,22 @@ impl DbPool {
         Self::install_drivers();
         let inner = AnyPoolOptions::new()
             .max_connections(max_connections)
+            // SQLite mengizinkan satu penulis dalam satu waktu; tanpa
+            // busy_timeout yang cukup, penulis ke-N di bawah konkurensi
+            // gagal langsung dengan "database is locked" (SQLITE_BUSY).
+            // Default sqlx 5 dtk tidak cukup di disk lambat: satu tulis
+            // HTTP (INSERT + audit) menahan lock ~250 ms, jadi antrean
+            // 20 penulis melewati 5 dtk dan gagal 500 (diukur 22 Nov
+            // 2026: 60 tulis bersamaan, 3 gagal tepat di ~5007 ms).
+            // 30 dtk memberi ruang antre tanpa mengubah durabilitas
+            // atau format file; Postgres tidak memakai jalur ini.
+            .after_connect(|conn, _| {
+                Box::pin(async move {
+                    use sqlx::Executor;
+                    conn.execute("PRAGMA busy_timeout = 30000").await?;
+                    Ok(())
+                })
+            })
             .connect(url)
             .await?;
         Ok(Self {
@@ -541,14 +558,20 @@ impl<'a> DbTx<'a> {
 #[derive(Debug, Clone)]
 pub struct Db {
     pool: DbPool,
-    /// Mutex proses untuk alokasi id baca-max-lalu-insert (A2): tanpa
-    /// ini dua penulis bersamaan di proses yang sama menghitung id yang
-    /// sama dan yang kedua gagal pelanggaran PK — retry 5x saja tidak
-    /// cukup bila 20 thread tersinkron (tiap ronde hanya 1 yang lolos,
-    /// butuh ~20 ronde). Kunci ini membuat hitung-max + INSERT atomik
-    /// antar task dalam satu proses; retry tetap ada sebagai jaring
-    /// pengaman untuk tabrakan antar proses. Hanya dipakai tiga jalur
-    /// tulis bersamaan (antrean, resep, outbox); tidak pernah bersarang.
+    /// Mutex proses untuk alokasi id baca-max-lalu-insert (A2, dilengkapi
+    /// follow-up item 3): tanpa ini dua penulis bersamaan di proses yang
+    /// sama menghitung id yang sama dan yang kedua gagal pelanggaran PK
+    /// — retry 5x saja tidak cukup bila 20 thread tersinkron (tiap ronde
+    /// hanya 1 yang lolos, butuh ~20 ronde). Kunci ini membuat hitung-max
+    /// + INSERT atomik antar task dalam satu proses; retry tetap ada
+    /// sebagai jaring pengaman untuk tabrakan antar proses. Dipakai
+    /// SEMUA jalur alokasi id sekuensial (antrean, resep, outbox, pasien,
+    /// encounter, tagihan, klaim, admisi, lab, radiologi, IGD, operasi,
+    /// persalinan, HD, transfusi, gigi, gizi, inventori, staf, shift,
+    /// user, kunci API, SEP/rujukan/PCare, catatan perawatan, laporan
+    /// radiologi, observasi IGD, hasil lab, notifikasi kritis); tidak
+    /// pernah bersarang. Id UUID (vital, kondisi, alergi, pembayaran,
+    /// versi SOAP) dan PK AUTOINCREMENT audit_log tidak memakai kunci ini.
     alloc_lock: Arc<tokio::sync::Mutex<()>>,
 }
 

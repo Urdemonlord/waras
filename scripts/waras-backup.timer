@@ -4,8 +4,11 @@
 # boot), log-nya masuk journald, dan statusnya bisa dicek dengan
 # `systemctl list-timers`.
 #
-# Jadwal: tiap hari 02:30 waktu lokal (jam sepi klinik). Ganti
-# OnCalendar bila perlu, mis. `*-*-* 03:00:00`.
+# Jadwal: tiap hari 02:30 waktu lokal server (jam sepi klinik).
+# PERHATIAN zona waktu: jam server VPS adalah CST, jadi 02:30 di sini
+# berarti 02:30 CST = 01:30 WIB. Bila maunya 02:30 WIB, ganti OnCalendar
+# jadi `*-*-* 01:30:00` atau ubah TZ server. Lihat
+# docs/FASE-A-FOLLOWUP.md item 2.
 #
 # Instalasi: lihat waras-backup.service.
 

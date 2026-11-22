@@ -125,6 +125,12 @@ impl Db {
 
     /// Admisi baru: gagal (422) bila bed bukan Kosong; bed jadi Terisi
     /// dalam transaksi yang sama dengan baris admisi.
+    /// `create_admission_once` memegang `Db::alloc_lock` selama
+    /// cek-bed + hitung-max + INSERT + update bed + commit; retry maks
+    /// 5x di sini hanya jaring pengaman untuk tabrakan antar proses.
+    /// Efek samping: kunci juga menyeragamkan cek-bed dalam satu proses,
+    /// jadi dua admisi bersamaan ke bed yang sama tidak bisa lolos
+    /// bersama (yang kedua gagal 422, bukan double-booking).
     pub async fn create_admission(
         &self,
         patient_id: &str,
@@ -135,6 +141,47 @@ impl Db {
         dpjp: &str,
         fall_risk: bool,
     ) -> Result<Admission, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_admission_once(
+                    patient_id,
+                    bed_id,
+                    encounter_id,
+                    diagnosis_code,
+                    diagnosis_display,
+                    dpjp,
+                    fall_risk,
+                )
+                .await
+            {
+                Ok(a) => return Ok(a),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id admisi".into())))
+    }
+
+    async fn create_admission_once(
+        &self,
+        patient_id: &str,
+        bed_id: &str,
+        encounter_id: Option<&str>,
+        diagnosis_code: &str,
+        diagnosis_display: &str,
+        dpjp: &str,
+        fall_risk: bool,
+    ) -> Result<Admission, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock) SEBELUM transaksi dibuka:
+        // cek-bed + hitung-max + INSERT + update bed harus atomik antar
+        // task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let mut tx = self.pool.begin().await.map_err(db_err)?;
         let bed: Option<WardBedRow> =
             sqlx::query_as("SELECT * FROM ward_beds WHERE id = ? LIMIT 1")
@@ -324,12 +371,40 @@ impl Db {
         rows.into_iter().map(|r| r.into_domain()).collect()
     }
 
+    /// Catatan perawatan baru: id `CRN-<seq>`. `add_care_note_once`
+    /// memegang `Db::alloc_lock` selama hitung-max + INSERT; retry maks
+    /// 5x di sini hanya jaring pengaman untuk tabrakan antar proses.
     pub async fn add_care_note(
         &self,
         admission_id: &str,
         note: &str,
         by: &str,
     ) -> Result<CareNote, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self.add_care_note_once(admission_id, note, by).await {
+                Ok(n) => return Ok(n),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id catatan perawatan".into())))
+    }
+
+    async fn add_care_note_once(
+        &self,
+        admission_id: &str,
+        note: &str,
+        by: &str,
+    ) -> Result<CareNote, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM care_notes")
             .fetch_all(&self.pool)
             .await

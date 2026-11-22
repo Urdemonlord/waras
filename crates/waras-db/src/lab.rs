@@ -88,7 +88,9 @@ impl Db {
     }
 
     /// Order lab baru: id `LAB-<seq>` (tanpa tanggal, sesuai desain;
-    /// seed 2210..2217, berikutnya 2218).
+    /// seed 2210..2217, berikutnya 2218). `create_lab_order_once`
+    /// memegang `Db::alloc_lock` selama hitung-max + INSERT; retry maks
+    /// 5x di sini hanya jaring pengaman untuk tabrakan antar proses.
     pub async fn create_lab_order(
         &self,
         patient_id: &str,
@@ -98,6 +100,44 @@ impl Db {
         ordered_from: &str,
         ordered_by: &str,
     ) -> Result<LabOrder, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_lab_order_once(
+                    patient_id,
+                    encounter_id,
+                    test_name,
+                    loinc,
+                    ordered_from,
+                    ordered_by,
+                )
+                .await
+            {
+                Ok(o) => return Ok(o),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id order lab".into())))
+    }
+
+    async fn create_lab_order_once(
+        &self,
+        patient_id: &str,
+        encounter_id: Option<&str>,
+        test_name: &str,
+        loinc: &str,
+        ordered_from: &str,
+        ordered_by: &str,
+    ) -> Result<LabOrder, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM lab_orders")
             .fetch_all(&self.pool)
             .await
@@ -162,7 +202,38 @@ impl Db {
     /// Simpan hasil lab. Flag tiap analit dihitung di sini; order jadi
     /// Kritis bila ada analit Kritis, bila tidak Selesai. Bila Kritis:
     /// notifikasi KRITIS + audit `lab.critical`.
+    /// `add_lab_results_once` memegang `Db::alloc_lock` selama hitung-max
+    /// + seluruh INSERT batch + notifikasi; retry maks 5x di sini hanya
+    /// jaring pengaman untuk tabrakan antar proses. Catatan: retry
+    /// mengulang SELURUH batch — bila tabrakan antar proses terjadi di
+    /// tengah batch (praktis tidak mungkin: kunci membuat batch atomik
+    /// dalam satu proses, dan deployment hanya satu proses server),
+    /// baris yang sudah tersisip di percobaan pertama akan terduplikasi
+    /// dengan id baru. Batch yang sepenuhnya idempotent butuh kunci
+    /// idempotensi per baris, di luar item ini.
     pub async fn add_lab_results(
+        &self,
+        order_id: &str,
+        results: &[NewLabResult],
+        by: &str,
+    ) -> Result<LabOrder, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self.add_lab_results_once(order_id, results, by).await {
+                Ok(o) => return Ok(o),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id hasil lab".into())))
+    }
+
+    async fn add_lab_results_once(
         &self,
         order_id: &str,
         results: &[NewLabResult],
@@ -172,6 +243,11 @@ impl Db {
             .get_lab_order(order_id)
             .await?
             .ok_or_else(|| WarasError::NotFound(format!("order lab {order_id} tidak ditemukan")))?;
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + seluruh
+        // INSERT batch + notifikasi kritis harus atomik antar task dalam
+        // satu proses. Baca order di atas sengaja di luar kunci supaya
+        // seksi kritis tetap pendek.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM lab_results")
             .fetch_all(&self.pool)
             .await
@@ -271,6 +347,9 @@ impl Db {
 
     /// Sisip notifikasi KRITIS hari klinik (dipakai hasil lab kritis).
     /// Id `NOTIF-<seq>` mengikuti seed (`NOTIF-001..003`).
+    /// Pemanggil HARUS sudah memegang `Db::alloc_lock`
+    /// (`add_lab_results_once`): helper ini tidak mengunci sendiri,
+    /// supaya tidak bersarang.
     async fn insert_notification_kritis(&self, message: &str) -> Result<(), WarasError> {
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM notifications")
             .fetch_all(&self.pool)

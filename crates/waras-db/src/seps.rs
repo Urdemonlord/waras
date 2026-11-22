@@ -167,8 +167,16 @@ impl OnlineBookingRow {
 
 /// Id berikutnya berpola `{PREFIX}-{YYYYMMDD}-{seq:03}` untuk tanggal
 /// klinik hari ini, mis. `SEP-20261119-009`. `table` hanya diisi konstanta
-/// internal (bukan input pengguna).
-async fn next_dated_id(db: &Db, table: &str, prefix: &str) -> Result<String, WarasError> {
+/// internal (bukan input pengguna). `_alloc` adalah bukti pemanggil sudah
+/// memegang `Db::alloc_lock` (lihat `create_sep_once` dkk): hitung-max di
+/// sini dan INSERT pemanggil harus atomik antar task dalam satu proses,
+/// jadi helper ini tidak mengunci sendiri.
+async fn next_dated_id(
+    db: &Db,
+    table: &str,
+    prefix: &str,
+    _alloc: &tokio::sync::MutexGuard<'_, ()>,
+) -> Result<String, WarasError> {
     let date_part = clinic_today().format("%Y%m%d").to_string();
     let full_prefix = format!("{prefix}-{date_part}-");
     let ids: Vec<String> =
@@ -185,9 +193,32 @@ impl Db {
     /// Simpan SEP. Bila `sep.id` kosong, isi id + `sep_number` berikutnya
     /// (`SEP-20261119-###`); bila `sep_number` kosong tapi id terisi, pakai
     /// id sebagai nomor SEP (kontrak: nomor SEP = id).
+    /// `create_sep_once` memegang `Db::alloc_lock` selama hitung-max +
+    /// INSERT; retry maks 5x di sini hanya jaring pengaman untuk
+    /// tabrakan antar proses.
     pub async fn create_sep(&self, sep: &Sep) -> Result<Sep, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self.create_sep_once(sep).await {
+                Ok(s) => return Ok(s),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id SEP".into())))
+    }
+
+    async fn create_sep_once(&self, sep: &Sep) -> Result<Sep, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let id = if sep.id.trim().is_empty() {
-            next_dated_id(self, "seps", "SEP").await?
+            next_dated_id(self, "seps", "SEP", &_alloc).await?
         } else {
             sep.id.clone()
         };
@@ -333,9 +364,32 @@ impl Db {
     }
 
     /// Simpan rujukan keluar. Bila `r.id` kosong, isi `RUJ-20261119-###`.
+    /// `create_referral_once` memegang `Db::alloc_lock` selama hitung-max
+    /// + INSERT; retry maks 5x di sini hanya jaring pengaman untuk
+    /// tabrakan antar proses.
     pub async fn create_referral(&self, r: &Referral) -> Result<Referral, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self.create_referral_once(r).await {
+                Ok(r) => return Ok(r),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id rujukan".into())))
+    }
+
+    async fn create_referral_once(&self, r: &Referral) -> Result<Referral, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let id = if r.id.trim().is_empty() {
-            next_dated_id(self, "referrals", "RUJ").await?
+            next_dated_id(self, "referrals", "RUJ", &_alloc).await?
         } else {
             r.id.clone()
         };
@@ -378,9 +432,32 @@ impl Db {
     }
 
     /// Catat kunjungan PCare. Bila `v.id` kosong, isi `PCV-20261119-###`.
+    /// `create_pcare_visit_once` memegang `Db::alloc_lock` selama
+    /// hitung-max + INSERT; retry maks 5x di sini hanya jaring pengaman
+    /// untuk tabrakan antar proses.
     pub async fn create_pcare_visit(&self, v: &PcareVisit) -> Result<PcareVisit, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self.create_pcare_visit_once(v).await {
+                Ok(v) => return Ok(v),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id kunjungan PCare".into())))
+    }
+
+    async fn create_pcare_visit_once(&self, v: &PcareVisit) -> Result<PcareVisit, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let id = if v.id.trim().is_empty() {
-            next_dated_id(self, "pcare_visits", "PCV").await?
+            next_dated_id(self, "pcare_visits", "PCV", &_alloc).await?
         } else {
             v.id.clone()
         };

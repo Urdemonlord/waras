@@ -13,7 +13,9 @@ use waras_core::{
 
 impl Db {
     /// Tagihan baru `INV-<tahun>-<seq>` (seq = maks tahun itu + 1),
-    /// status Menunggu.
+    /// status Menunggu. `create_invoice_once` memegang `Db::alloc_lock`
+    /// selama hitung-max + INSERT; retry maks 5x di sini hanya jaring
+    /// pengaman untuk tabrakan antar proses.
     pub async fn create_invoice(
         &self,
         patient_id: &str,
@@ -23,6 +25,37 @@ impl Db {
         amount: i64,
         ina_cbg_code: Option<&str>,
     ) -> Result<Invoice, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_invoice_once(patient_id, encounter_id, payer, service, amount, ina_cbg_code)
+                .await
+            {
+                Ok(i) => return Ok(i),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id tagihan".into())))
+    }
+
+    async fn create_invoice_once(
+        &self,
+        patient_id: &str,
+        encounter_id: Option<&str>,
+        payer: waras_core::types::Insurance,
+        service: &str,
+        amount: i64,
+        ina_cbg_code: Option<&str>,
+    ) -> Result<Invoice, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let year = clinic_today().year();
         let ids_year: Vec<String> = sqlx::query_scalar(
             "SELECT id FROM invoices WHERE id LIKE ?",

@@ -53,7 +53,9 @@ impl Db {
     }
 
     /// Order radiologi baru: id `RAD-<seq>` (tanpa tanggal, sesuai desain;
-    /// seed 0911..0917, berikutnya 0918).
+    /// seed 0911..0917, berikutnya 0918). `create_rad_order_once`
+    /// memegang `Db::alloc_lock` selama hitung-max + INSERT; retry maks
+    /// 5x di sini hanya jaring pengaman untuk tabrakan antar proses.
     pub async fn create_rad_order(
         &self,
         patient_id: &str,
@@ -63,6 +65,44 @@ impl Db {
         ordered_from: &str,
         ordered_by: &str,
     ) -> Result<RadOrder, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .create_rad_order_once(
+                    patient_id,
+                    encounter_id,
+                    modality,
+                    area,
+                    ordered_from,
+                    ordered_by,
+                )
+                .await
+            {
+                Ok(o) => return Ok(o),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id order radiologi".into())))
+    }
+
+    async fn create_rad_order_once(
+        &self,
+        patient_id: &str,
+        encounter_id: Option<&str>,
+        modality: &str,
+        area: &str,
+        ordered_from: &str,
+        ordered_by: &str,
+    ) -> Result<RadOrder, WarasError> {
+        // Kunci alokasi (lihat Db::alloc_lock): hitung-max + INSERT harus
+        // atomik antar task dalam satu proses.
+        let _alloc = self.alloc_lock.lock().await;
         let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM rad_orders")
             .fetch_all(&self.pool)
             .await
@@ -121,7 +161,37 @@ impl Db {
     }
 
     /// Simpan laporan (upsert per order) + order jadi Selesai.
+    /// `save_rad_report_once` memegang `Db::alloc_lock` selama
+    /// cek-laporan + hitung-max + INSERT/UPDATE; retry maks 5x di sini
+    /// hanya jaring pengaman untuk tabrakan antar proses. Efek samping:
+    /// kunci juga menyeragamkan cek upsert dalam satu proses, jadi dua
+    /// laporan bersamaan untuk order yang sama tidak membuat dua baris.
     pub async fn save_rad_report(
+        &self,
+        order_id: &str,
+        findings: &str,
+        radiologist: &str,
+    ) -> Result<RadReport, WarasError> {
+        let mut last_err: Option<WarasError> = None;
+        for _ in 0..5 {
+            match self
+                .save_rad_report_once(order_id, findings, radiologist)
+                .await
+            {
+                Ok(r) => return Ok(r),
+                Err(WarasError::Database(ref m))
+                    if crate::is_unique_violation_msg(m) =>
+                {
+                    last_err = Some(WarasError::Database(m.clone()));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Err(last_err
+            .unwrap_or_else(|| WarasError::Database("gagal alokasi id laporan radiologi".into())))
+    }
+
+    async fn save_rad_report_once(
         &self,
         order_id: &str,
         findings: &str,
@@ -135,6 +205,10 @@ impl Db {
             })?;
         let _ = order;
         let now = clinic_now_string();
+        // Kunci alokasi (lihat Db::alloc_lock): cek-laporan + hitung-max +
+        // INSERT harus atomik antar task dalam satu proses. Baca order di
+        // atas sengaja di luar kunci supaya seksi kritis tetap pendek.
+        let _alloc = self.alloc_lock.lock().await;
         match self.get_rad_report(order_id).await? {
             Some(existing) => {
                 sqlx::query(
